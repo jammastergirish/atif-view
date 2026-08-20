@@ -222,3 +222,62 @@ def test_bad_index_on_new_endpoints(server):
         with pytest.raises(urllib.error.HTTPError) as caught:
             _get(server + path)
         assert caught.value.code == 404
+
+
+def _post(url: str, data: bytes, filename: str):
+    request = urllib.request.Request(
+        url, data=data, method="POST", headers={"X-Filename": filename}
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status, json.loads(response.read())
+
+
+def test_open_adds_an_uploaded_log_to_the_index(server):
+    """The Open button must add exactly what the CLI would."""
+    before = len(json.loads(_get(server + "/api/index")[1]))
+    status, result = _post(server + "/api/open", LOG.encode(), "dropped.jsonl")
+    assert status == 200
+    assert result["added"] == 1
+    after = json.loads(_get(server + "/api/index")[1])
+    assert len(after) == before + 1
+    # And it is immediately viewable, not merely listed.
+    _, body = _get(server + f"/api/trajectory?i={result['first']}")
+    assert json.loads(body)["schema_version"] == "ATIF-v1.7"
+
+
+def test_open_rejects_a_file_that_is_not_a_log(server):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post(server + "/api/open", b'{"grade":1}\n', "grades.jsonl")
+    assert caught.value.code == 415
+
+
+def test_open_rejects_an_empty_upload(server):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post(server + "/api/open", b"", "nothing.jsonl")
+    assert caught.value.code == 400
+
+
+def test_open_neutralises_a_traversing_filename(server, tmp_path):
+    """A client-supplied name must not decide where bytes land."""
+    status, result = _post(
+        server + "/api/open", LOG.encode(), "../../../../tmp/escaped.jsonl"
+    )
+    assert status == 200
+    landed = Path(json.loads(_get(server + "/api/index")[1])[result["first"]]["path"])
+    assert landed.name == "escaped.jsonl"
+    assert "/tmp/escaped.jsonl" != str(landed)
+
+
+def test_safe_name_reduces_to_a_leaf():
+    from atif_view.viewer import _safe_name
+
+    assert _safe_name("../../etc/passwd") == "passwd"
+    assert _safe_name("/absolute/path.jsonl") == "path.jsonl"
+    assert _safe_name("") == "upload"
+    assert _safe_name("%2e%2e%2fetc%2fshadow") == "shadow"
+
+
+def test_open_is_the_only_post_route(server):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post(server + "/api/anything", b"x", "x.jsonl")
+    assert caught.value.code == 404

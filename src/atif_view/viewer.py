@@ -16,12 +16,13 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import webbrowser
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from atif_make.atif import ContentPart, Trajectory
 from atif_make.convert import convert
@@ -54,8 +55,17 @@ kbd,code,pre{font-family:ui-monospace,"SF Mono",Menlo,monospace}
 
 /* ---- sidebar ---- */
 #side{width:320px;flex:0 0 320px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
-#brand{padding:16px 16px 10px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:baseline;gap:8px}
+#brand{padding:16px 16px 10px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
 #brand small{font-weight:400;color:var(--faint);font-size:11.5px}
+#brand button{margin-left:auto;border:1px solid var(--line);background:var(--panel);color:var(--dim);
+  border-radius:7px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
+#brand button:hover{background:var(--sunk);color:var(--ink);border-color:var(--accent)}
+#drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
+  border:3px dashed var(--accent);pointer-events:none}
+.note{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:200;max-width:70ch;
+  background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--tool);
+  border-radius:9px;padding:10px 14px;font-size:12.5px;white-space:pre-wrap;box-shadow:0 4px 14px rgba(0,0,0,.16)}
 #q{margin:0 16px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font-size:13px;width:calc(100% - 32px)}
 #q:focus{outline:2px solid var(--accent);outline-offset:-1px}
 #list{overflow:auto;flex:1;padding-bottom:20px}
@@ -215,7 +225,13 @@ pre.json{line-height:1.45}
 </style>
 
 <div id="side">
-  <div id="brand">atif <small id="count"></small></div>
+  <div id="brand">atif <small id="count"></small>
+    <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
+  </div>
+  <input id="picker" type="file" multiple hidden
+         accept=".jsonl,.json,.har,.zip,.gz,.tgz,.bz2,.xz,.tar"
+         onchange="openFiles(this.files)">
+  <div id="drop" hidden>Drop logs, trajectories or archives</div>
   <input id="q" placeholder="filter sessions…">
   <div id="list"></div>
 </div>
@@ -512,6 +528,46 @@ function reveal(a){
   });
   return false;
 }
+
+/* Send a file to the server, which routes it through the same discovery the
+   CLI uses. One request per file; the body is the file itself, so there is no
+   multipart parsing to get wrong. */
+async function openFiles(files){
+  if(!files||!files.length)return;
+  const names=[...files].map(f=>f.name);
+  count.textContent=`opening ${names.length} file${names.length>1?"s":""}…`;
+  const problems=[];
+  let first=null;
+  for(const file of files){
+    try{
+      const res=await fetch("/api/open",{method:"POST",
+        headers:{"X-Filename":encodeURIComponent(file.name)},body:file});
+      const data=await res.json();
+      if(!res.ok||data.error){problems.push(`${file.name}: ${data.error||res.status}`);continue}
+      if(first===null)first=data.first;
+    }catch(err){problems.push(`${file.name}: ${err.message}`)}
+  }
+  const fresh=await fetch("/api/index").then(r=>r.json());
+  INDEX=fresh;count.textContent=fresh.length+" sessions";drawList();
+  if(first!==null)pick(first);
+  if(problems.length)note(problems.join("\n"));
+  picker.value="";
+}
+
+function note(message){
+  const el=document.createElement("div");
+  el.className="note";el.textContent=message;
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),6000);
+}
+
+// Dropping a file anywhere is the same action as choosing one.
+addEventListener("dragover",e=>{e.preventDefault();drop.hidden=false});
+addEventListener("dragleave",e=>{if(e.relatedTarget===null)drop.hidden=true});
+addEventListener("drop",e=>{
+  e.preventDefault();drop.hidden=true;
+  if(e.dataTransfer?.files?.length)openFiles(e.dataTransfer.files);
+});
 
 function toggleSide(){
   const hidden=document.body.classList.toggle("hide-side");
@@ -858,6 +914,18 @@ def _reveal(target: Path) -> bool:
 # Enough of a log to inspect its shape without shipping a 143 MB file.
 RAW_LIMIT = 512 * 1024
 
+# A browser upload crosses loopback, so this is generous; it exists to stop a
+# stray multi-gigabyte archive from filling the disk, not to be restrictive.
+UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
+
+_uploads = tempfile.TemporaryDirectory(prefix="atif-view-open-")
+
+
+def _safe_name(raw: str) -> str:
+    """Reduce a client-supplied filename to a leaf, so it cannot escape."""
+    name = Path(unquote(raw or "")).name.strip()
+    return name or "upload"
+
 
 def _associated_files(source: Path) -> list[dict]:
     """Everything that travelled with a session: subagents, sidecars, siblings.
@@ -919,6 +987,65 @@ class _Handler(BaseHTTPRequestHandler):
             return self.entries[int(parse_qs(url.query).get("i", ["-1"])[0])]
         except (ValueError, IndexError):
             return None
+
+    def do_POST(self) -> None:
+        if urlparse(self.path).path != "/api/open":
+            self.send_error(404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(400)
+            return
+        if length <= 0:
+            self._json({"error": "empty upload"}, 400)
+            return
+        if length > UPLOAD_LIMIT:
+            self._json({"error": f"file is larger than {UPLOAD_LIMIT // 1024 ** 3} GB"}, 413)
+            return
+
+        target = Path(_uploads.name) / _safe_name(self.headers.get("X-Filename", ""))
+        try:
+            remaining = length
+            with target.open("wb") as handle:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    remaining -= len(chunk)
+        except OSError as exc:
+            self._json({"error": f"could not save upload: {exc}"}, 500)
+            return
+
+        # Exactly what `atif-view <path>` and `atif-make index` do: the CLI and
+        # this button must never disagree about what counts as openable.
+        try:
+            found = scan([target])
+        except (ValueError, OSError) as exc:
+            self._json({"error": str(exc)}, 400)
+            return
+        if not found:
+            self._json({"error": f"nothing convertible in {target.name}"}, 415)
+            return
+
+        with self.lock:
+            start = len(self.entries)
+            self.entries.extend(found)
+        self._json({
+            "added": len(found),
+            "first": start,
+            "names": [Path(e.path).name for e in found],
+        })
+
+    def _json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self) -> None:
         url = urlparse(self.path)

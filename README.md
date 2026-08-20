@@ -63,6 +63,13 @@ when you need to see exactly what the model emitted.
 Images are served from memory at `/api/image` and rendered inline, so a session
 with screenshots is browsable without writing anything to disk.
 
+**Opening things.** `Open…` in the sidebar takes a normal file dialog, and
+files can be dropped anywhere on the window. Either way the upload goes to the
+same `corpus.scan()` the CLI uses, so the button and `atif-view <path>` can
+never disagree about what counts as openable — logs, converted trajectories and
+archives all work. A client-supplied filename is reduced to a leaf before
+anything is written, and uploads live in a temporary directory for the session.
+
 **Finding things.** A run of several thousand steps needs more than scrolling.
 `Search this run` matches across message text, reasoning, tool names, tool
 arguments and observation output — the things a reader can actually see. Filter
