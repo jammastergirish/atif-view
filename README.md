@@ -86,6 +86,26 @@ steps, every session with branches gets a jump list at the top — agent type,
 task, step count — and an "only branches" filter. Steps render 250 at a time so
 a 8,000-step session stays responsive.
 
+## Developing alongside atif-make
+
+The two packages are developed together. Installing the viewer editable makes
+its own code live:
+
+```sh
+uv tool install --force --editable .
+```
+
+That alone still resolves `atif-make` from git, so edits to the converter would
+not show up. To run with **both** live, add it explicitly:
+
+```sh
+uv run --with-editable ../atif-make atif-view
+```
+
+Use that while changing anything in `atif-make`. Reinstall from the index
+(`uv tool install --force atif-view`) when you want to test what users actually
+get.
+
 ## Tests
 
 ```sh
