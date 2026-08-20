@@ -63,6 +63,20 @@ when you need to see exactly what the model emitted.
 Images are served from memory at `/api/image` and rendered inline, so a session
 with screenshots is browsable without writing anything to disk.
 
+**Finding things.** A run of several thousand steps needs more than scrolling.
+`Search this run` matches across message text, reasoning, tool names, tool
+arguments and observation output — the things a reader can actually see. Filter
+lenses (`All / User / Agent / System / Tools / Reasoning / Branches`) carry live
+counts for the whole run, so you can tell at a glance that a session is 7,628
+tool turns and 451 user messages before filtering to any of them.
+
+**Provenance and sources.** Three tabs: `Trajectory` renders the run;
+`Raw` shows the head of the original log, so you can see what was converted
+rather than trusting the conversion; `Files` lists everything that travelled
+with the session — subagent traces, sidecar manifests, bundled images — each
+revealable in the file manager. A details strip records the schema version,
+detected source format, model, session id and transcript size.
+
 **Reading a trajectory.** Every step is a tinted card — one colour per role, so
 user, agent and system turns are distinguishable without reading labels — with
 its ATIF `step_id` in the gutter to the left of the timeline. The number is also

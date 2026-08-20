@@ -11,6 +11,7 @@ off-host.
 
 from __future__ import annotations
 
+import errno
 import json
 import shutil
 import subprocess
@@ -85,7 +86,43 @@ body.hide-side #main{padding-left:52px}
 .stats{display:flex;gap:26px;flex-wrap:wrap;padding:16px 0 18px;margin:16px 0 22px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .stat span{color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em}
-.filters{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+/* tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 18px}
+.tab{padding:7px 14px;font-size:13px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+
+/* search + lenses + provenance */
+.runbar{display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:16px}
+.search{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;
+  background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px}
+.search:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.lenses{display:flex;gap:5px;flex-wrap:wrap}
+.lens{display:inline-flex;align-items:baseline;gap:6px;border:1px solid var(--line);
+  border-radius:999px;padding:3px 6px 3px 11px;font-size:12px;color:var(--dim);cursor:pointer;background:var(--panel)}
+.lens:hover{color:var(--ink)}
+.lens.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.lens b{font-variant-numeric:tabular-nums;font-size:11px;background:var(--sunk);color:var(--dim);
+  border-radius:999px;padding:0 6px;font-weight:600}
+.lens.on b{background:rgba(255,255,255,.2);color:var(--bg)}
+.details{display:flex;flex-wrap:wrap;gap:4px 22px;font-size:11.5px;color:var(--faint);
+  border-top:1px solid var(--line);padding-top:10px}
+.details>div{display:flex;gap:7px;align-items:baseline;min-width:0}
+.details span{text-transform:uppercase;letter-spacing:.08em}
+.details code{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46ch}
+.hits{font-size:12px;color:var(--dim);align-self:center;margin-left:4px}
+
+/* raw + files panels */
+.rawmeta{font-size:11.5px;color:var(--faint);margin-bottom:8px;overflow-wrap:anywhere}
+.rawsrc{background:var(--sunk);border-radius:9px;padding:12px;font-size:11.5px;line-height:1.5;
+  max-height:70vh;overflow:auto;white-space:pre;overflow-wrap:normal}
+table.files{border-collapse:collapse;width:100%;font-size:13px}
+table.files th{text-align:left;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
+table.files td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:baseline}
+table.files tr:hover td{background:var(--sunk)}
+
+.filters{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;align-items:center}
 .chip{border:1px solid var(--line);background:var(--panel);color:var(--dim);border-radius:999px;padding:3px 11px;font-size:12px;cursor:pointer}
 .chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 /* Divider between the role filters and the display toggles. */
@@ -466,6 +503,7 @@ const num=n=>(n??0).toLocaleString();
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
 let INDEX=[],cur=null,traj=null,show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
+let tab="trajectory",query="",lens="all",extra=null;
 
 function reveal(a){
   fetch(a.getAttribute("href")).then(r=>{
@@ -517,7 +555,7 @@ function pick(i){
   main.innerHTML=`<div class="empty">Converting…</div>`;
   fetch("/api/trajectory?i="+i).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}
-    traj=t;onlyBranches=false;limit=PAGE_SIZE;render();
+    traj=t;onlyBranches=false;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;render();
   });
 }
 
@@ -525,6 +563,39 @@ const toggle=r=>{show[r]=!show[r];limit=PAGE_SIZE;render()};
 const toggleBranches=()=>{onlyBranches=!onlyBranches;limit=PAGE_SIZE;render()};
 const more=()=>{limit+=PAGE_SIZE*4;render()};
 const toggleRaw=()=>{raw=!raw;render()};
+const setLens=l=>{lens=l;limit=PAGE_SIZE;render()};
+const setQuery=v=>{query=v;limit=PAGE_SIZE;render()};
+function setTab(t){
+  tab=t;
+  // Raw and Files come from the server; fetch once per session, then cache.
+  if(t!=="trajectory"&&!(extra&&extra[t])){
+    fetch(`/api/${t}?i=${cur}`).then(r=>r.json()).then(d=>{extra={...extra,[t]:d};render()});
+  }
+  render();
+}
+
+/* What a step counts as, for the filter counts. A step can be several things
+   at once: an agent turn that calls tools and carries reasoning. */
+function facets(s){
+  const f=[s.source];
+  if(s.tool_calls?.length)f.push("tools");
+  if(s.reasoning_content)f.push("reasoning");
+  return f;
+}
+const LENSES=[["all","All steps"],["user","User"],["agent","Agent"],["system","System"],
+              ["tools","Tools"],["reasoning","Reasoning"],["branches","Branches"]];
+
+/* Search the text a reader can actually see: message, reasoning, tool names and
+   arguments, and observation content. */
+function haystack(s){
+  const parts=[typeof s.message==="string"?s.message:(s.message||[]).map(p=>p.text||"").join(" "),
+               s.reasoning_content||""];
+  for(const c of s.tool_calls||[]){parts.push(c.function_name);parts.push(JSON.stringify(c.arguments||{}))}
+  for(const r of s.observation?.results||[]){
+    if(typeof r.content==="string")parts.push(r.content);
+  }
+  return parts.join(" ").toLowerCase();
+}
 
 /* Every step that delegates, with the trajectory it delegates to. */
 function branchIndex(t){
@@ -558,11 +629,13 @@ function jump(pos,id){
 function render(){
   const t=traj,e=INDEX[cur],m=t.final_metrics||{},a=t.agent||{};
   const branches=branchIndex(t);
-  const bySteps=new Set(branches.map(b=>b.stepIndex));
+  const branchSteps=new Set(branches.map(b=>b.stepIndex));
+  const q=query.trim().toLowerCase();
 
-  let rows=t.steps.map((s,i)=>({s,i})).filter(({s,i})=>show[s.source]&&(!onlyBranches||bySteps.has(i)));
-  const total=rows.length;
-  const shown=rows.slice(0,limit);
+  // Counts describe the whole run, so they stay stable as filters change.
+  const counts={all:t.steps.length,branches:branches.length};
+  for(const [k] of LENSES){ if(k!=="all"&&k!=="branches")counts[k]=0 }
+  t.steps.forEach(s=>facets(s).forEach(f=>{if(f in counts)counts[f]++}));
 
   main.innerHTML=`
     <div class="hd">
@@ -571,24 +644,84 @@ function render(){
     </div>
     <div class="stats">
       ${stat(t.steps.length,"steps")}
-      ${stat(t.steps.filter(s=>s.tool_calls).length,"tool turns")}
+      ${stat(counts.tools,"tool turns")}
+      ${stat(counts.reasoning,"reasoning")}
       ${branches.length?stat(branches.length,"branches"):""}
       ${stat(m.total_prompt_tokens,"prompt")}
       ${stat(m.total_completion_tokens,"output")}
       ${stat(m.total_cached_tokens,"cached")}
     </div>
-    ${branches.length?branchNav(branches):""}
+    <div class="tabs">
+      ${[["trajectory","Trajectory"],["raw","Raw"],["files","Files"]].map(([k,l])=>
+        `<span class="tab${tab===k?" on":""}" onclick="setTab('${k}')">${l}</span>`).join("")}
+    </div>
+    ${tab==="trajectory"?trajectoryTab(t,e,branches,branchSteps,counts,q):panelTab()}`;
+
+  const box=document.getElementById("q2");
+  if(box){ box.value=query; box.focus();
+           box.setSelectionRange(box.value.length,box.value.length); }
+}
+
+function trajectoryTab(t,e,branches,branchSteps,counts,q){
+  let rows=t.steps.map((s,i)=>({s,i}));
+  if(lens==="branches")rows=rows.filter(({i})=>branchSteps.has(i));
+  else if(lens!=="all")rows=rows.filter(({s})=>facets(s).includes(lens));
+  else rows=rows.filter(({s})=>show[s.source]);
+  if(q)rows=rows.filter(({s})=>haystack(s).includes(q));
+
+  const total=rows.length, shown=rows.slice(0,limit);
+  return `
+    <div class="runbar">
+      <input id="q2" class="search" placeholder="Search this run…"
+             oninput="setQuery(this.value)" spellcheck="false">
+      <div class="lenses">
+        ${LENSES.filter(([k])=>k!=="branches"||branches.length)
+          .map(([k,l])=>`<span class="lens${lens===k?" on":""}" onclick="setLens('${k}')">
+             ${l}<b>${num(counts[k]??0)}</b></span>`).join("")}
+      </div>
+      ${details(t,e)}
+    </div>
+    ${branches.length&&lens!=="branches"?branchNav(branches):""}
     <div class="filters">
-      ${["user","agent","system"].map(r=>
-        `<span class="chip${show[r]?" on":""}" onclick="toggle('${r}')">${r}</span>`).join("")}
-      ${branches.length?`<span class="chip${onlyBranches?" on":""}" onclick="toggleBranches()">only branches</span>`:""}
+      ${lens==="all"?["user","agent","system"].map(r=>
+        `<span class="chip${show[r]?" on":""}" onclick="toggle('${r}')">${r}</span>`).join(""):""}
       <span class="fsep"></span>
       <span class="chip${raw?" on":""}" onclick="toggleRaw()">raw text</span>
+      ${q?`<span class="hits">${num(total)} of ${num(t.steps.length)} match “${esc(query)}”</span>`:""}
     </div>
-    ${shown.map(({s,i})=>step(s,t,0,i)).join("")||`<div class="empty">Nothing matches those filters.</div>`}
+    ${shown.map(({s,i})=>step(s,t,0,i,"")).join("")
+      ||`<div class="empty">Nothing matches.</div>`}
     ${total>shown.length?`<div class="more"><button onclick="more()">Show more —
         ${num(shown.length)} of ${num(total)} steps</button></div>`:""}`;
 }
+
+/* Provenance: what this trajectory is and where it came from. */
+function details(t,e){
+  const rows=[["Schema",t.schema_version],["Source",e.format],["Agent",t.agent?.name],
+              ["Model",t.agent?.model_name],["Session",t.session_id],
+              ["Transcript",e.size_bytes?(e.size_bytes/1048576).toFixed(1)+" MB":null],
+              ["Path",e.path]];
+  return `<div class="details">${rows.filter(([,v])=>v).map(([k,v])=>
+    `<div><span>${k}</span><code>${esc(v)}</code></div>`).join("")}</div>`;
+}
+
+function panelTab(){
+  const d=extra&&extra[tab];
+  if(!d)return `<div class="empty">Loading…</div>`;
+  if(tab==="raw"){
+    return `<div class="rawmeta">${esc(d.path)} · ${(d.size/1048576).toFixed(2)} MB${
+      d.truncated?` · showing the first ${(RAW_KB)} KB`:""}</div>
+      <pre class="rawsrc">${esc(d.text)}</pre>`;
+  }
+  if(!d.length)return `<div class="empty">No associated files.</div>`;
+  return `<table class="files"><thead><tr><th>File</th><th>Role</th><th>Size</th></tr></thead><tbody>${
+    d.map(f=>`<tr><td><a href="/api/reveal?path=${encodeURIComponent(f.path)}"
+        onclick="return reveal(this)" title="Reveal in Finder">${esc(f.name)}</a></td>
+      <td><span class="pill">${esc(f.role)}</span></td>
+      <td>${(f.size/1024).toFixed(0)} KB</td></tr>`).join("")}</tbody></table>`;
+}
+const RAW_KB=512;
+
 const stat=(v,l)=>v==null?"":`<div class="stat"><b>${num(v)}</b><span>${l}</span></div>`;
 
 /* A jump list, because branches are scattered through thousands of steps. */
@@ -722,6 +855,48 @@ def _reveal(target: Path) -> bool:
     return True
 
 
+# Enough of a log to inspect its shape without shipping a 143 MB file.
+RAW_LIMIT = 512 * 1024
+
+
+def _associated_files(source: Path) -> list[dict]:
+    """Everything that travelled with a session: subagents, sidecars, siblings.
+
+    A session is rarely one file — Claude Code keeps subagent traces in a
+    sibling directory, and a bundle carries images next to the trajectory.
+    """
+    found: list[dict] = []
+    seen: set[Path] = set()
+
+    def add(path: Path, role: str) -> None:
+        resolved = path.resolve()
+        if resolved in seen or not path.is_file():
+            return
+        seen.add(resolved)
+        found.append({
+            "name": path.name,
+            "path": str(path),
+            "role": role,
+            "size": path.stat().st_size,
+        })
+
+    add(source, "source")
+    subagents = source.parent / source.stem / "subagents"
+    if subagents.is_dir():
+        for file in sorted(subagents.iterdir()):
+            add(file, "subagent")
+    # A bundle keeps its images and manifest beside the trajectory.
+    for sibling in sorted(source.parent.iterdir()):
+        if sibling == source:
+            continue
+        if sibling.is_dir() and sibling.name == "images":
+            for image in sorted(sibling.iterdir()):
+                add(image, "image")
+        elif sibling.is_file() and sibling.suffix in {".json", ".jsonl", ".har", ".md", ".txt"}:
+            add(sibling, "sibling")
+    return found
+
+
 class _Handler(BaseHTTPRequestHandler):
     entries: list[Entry] = []
     cache: dict[int, dict] = {}
@@ -737,6 +912,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _entry(self, url):
+        """Resolve the ?i= index to an entry, or None."""
+        try:
+            return self.entries[int(parse_qs(url.query).get("i", ["-1"])[0])]
+        except (ValueError, IndexError):
+            return None
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
@@ -772,6 +954,38 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(b"ok", "text/plain")
             else:
                 self.send_error(404)
+            return
+
+        if url.path == "/api/raw":
+            entry = self._entry(url)
+            if entry is None:
+                self.send_error(404)
+                return
+            source = Path(entry.path)
+            try:
+                # A rollout can be hundreds of MB; send a head, not the lot.
+                with source.open("rb") as handle:
+                    body = handle.read(RAW_LIMIT + 1)
+            except OSError:
+                self.send_error(404)
+                return
+            truncated = len(body) > RAW_LIMIT
+            payload = {
+                "path": str(source),
+                "size": source.stat().st_size,
+                "truncated": truncated,
+                "text": body[:RAW_LIMIT].decode("utf-8", errors="replace"),
+            }
+            self._send(json.dumps(payload).encode(), "application/json")
+            return
+
+        if url.path == "/api/files":
+            entry = self._entry(url)
+            if entry is None:
+                self.send_error(404)
+                return
+            self._send(json.dumps(_associated_files(Path(entry.path))).encode(),
+                       "application/json")
             return
 
         if url.path == "/api/image":
@@ -823,14 +1037,42 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
-def serve(entries: list[Entry] | None = None, port: int = 7433, open_browser: bool = True) -> None:
+def _bind(port: int, handler, explicit: bool) -> ThreadingHTTPServer:
+    """Bind to `port`, or to the next free one when the choice was ours.
+
+    Viewing a second session while a first is still open is normal, so a busy
+    default should not be an error. An explicitly requested port is honoured or
+    reported — silently moving it would be worse than failing.
+    """
+    last: OSError | None = None
+    for candidate in range(port, port + (1 if explicit else 20)):
+        try:
+            return ThreadingHTTPServer(("127.0.0.1", candidate), handler)
+        except OSError as exc:
+            if exc.errno not in (errno.EADDRINUSE, errno.EACCES):
+                raise
+            last = exc
+    raise SystemExit(
+        f"atif-view: port {port} is already in use"
+        + ("" if explicit else f" (tried {port}-{port + 19})")
+        + ".\nPass --port to choose another, or stop the running viewer."
+    ) from last
+
+
+def serve(
+    entries: list[Entry] | None = None,
+    port: int = 7433,
+    open_browser: bool = True,
+    explicit_port: bool = False,
+) -> None:
     handler = partial(_Handler)
     _Handler.entries = entries if entries is not None else scan()
     _Handler.cache = {}
     _Handler.media = {}
 
     # Loopback only: these logs contain source code and tool output.
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = _bind(port, handler, explicit_port)
+    port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/"
     print(f"atif-view: {url}  ({len(_Handler.entries)} sessions)")
     print("Ctrl-C to stop.")

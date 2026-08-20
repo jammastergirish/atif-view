@@ -117,3 +117,108 @@ def test_binds_loopback_only(server):
         s.settimeout(2)
         # Reaching the server over a routable address would mean it is exposed.
         assert s.connect_ex((address, port)) != 0
+
+
+def test_falls_back_when_the_default_port_is_busy(tmp_path):
+    """Viewing a second session while a first is open is normal, not an error."""
+    log = tmp_path / "s.jsonl"
+    log.write_text(LOG)
+    entries = corpus.scan([log])
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    busy = taken.getsockname()[1]
+    try:
+        thread = threading.Thread(
+            target=serve,
+            kwargs={"entries": entries, "port": busy, "open_browser": False,
+                    "explicit_port": False},
+            daemon=True,
+        )
+        thread.start()
+        # It must come up on some nearby port rather than crashing. Poll the
+        # whole range until a deadline: one attempt per port races a slow start.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            for candidate in range(busy + 1, busy + 20):
+                try:
+                    status, _ = _get(f"http://127.0.0.1:{candidate}/api/index")
+                except (urllib.error.URLError, ConnectionError, OSError):
+                    continue
+                assert status == 200
+                return
+            time.sleep(0.1)
+        pytest.fail("viewer did not fall back to a free port")
+    finally:
+        taken.close()
+
+
+def test_explicit_port_in_use_is_reported_not_traced(tmp_path):
+    """An explicitly requested port is honoured or reported, never moved."""
+    log = tmp_path / "s.jsonl"
+    log.write_text(LOG)
+    entries = corpus.scan([log])
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    busy = taken.getsockname()[1]
+    try:
+        with pytest.raises(SystemExit) as caught:
+            serve(entries, port=busy, open_browser=False, explicit_port=True)
+        assert "already in use" in str(caught.value)
+        assert "--port" in str(caught.value)
+    finally:
+        taken.close()
+
+
+def test_raw_endpoint_returns_the_source(server):
+    _, body = _get(server + "/api/raw?i=0")
+    raw = json.loads(body)
+    assert raw["path"].endswith("session.jsonl")
+    assert not raw["truncated"]
+    # The head of the actual log, not the converted trajectory.
+    assert '"session_meta"' in raw["text"]
+
+
+def test_raw_endpoint_truncates_a_large_file(tmp_path):
+    """A rollout can be hundreds of MB; the panel must not ship the lot."""
+    from atif_view.viewer import RAW_LIMIT, _Handler
+
+    big = tmp_path / "big.jsonl"
+    big.write_text(LOG + ("x" * (RAW_LIMIT + 1000)))
+    assert big.stat().st_size > RAW_LIMIT
+
+
+def test_files_endpoint_lists_subagents(tmp_path, server):
+    _, body = _get(server + "/api/files?i=0")
+    files = json.loads(body)
+    roles = {f["role"] for f in files}
+    assert "source" in roles
+    assert all(f["size"] >= 0 for f in files)
+
+
+def test_files_endpoint_finds_sibling_subagents(tmp_path):
+    from atif_view.viewer import _associated_files
+
+    source = tmp_path / "sess.jsonl"
+    source.write_text(LOG)
+    subagents = tmp_path / "sess" / "subagents"
+    subagents.mkdir(parents=True)
+    (subagents / "agent-abc.jsonl").write_text(LOG)
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "a.png").write_bytes(b"\x89PNG")
+
+    found = _associated_files(source)
+    roles = {f["name"]: f["role"] for f in found}
+    assert roles["sess.jsonl"] == "source"
+    assert roles["agent-abc.jsonl"] == "subagent"
+    assert roles["a.png"] == "image"
+
+
+def test_bad_index_on_new_endpoints(server):
+    for path in ("/api/raw?i=999", "/api/files?i=999"):
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            _get(server + path)
+        assert caught.value.code == 404

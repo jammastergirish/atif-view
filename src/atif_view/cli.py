@@ -50,7 +50,12 @@ def cmd_view(args: argparse.Namespace) -> int:
     if not entries:
         print("atif-view: nothing to view (try `atif-make index` first)", file=sys.stderr)
         return 1
-    serve(entries, port=args.port, open_browser=not args.no_open)
+    serve(
+        entries,
+        port=args.port or 7433,
+        open_browser=not args.no_open,
+        explicit_port=args.port is not None,
+    )
     return 0
 
 
@@ -61,7 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", nargs="?",
                         help="file, directory or archive (default: the atif-make index)")
-    parser.add_argument("--port", type=int, default=7433)
+    parser.add_argument("--port", type=int, default=None,
+                        help="port to listen on (default: 7433, or the next free one)")
     parser.add_argument("--no-open", action="store_true", help="do not open a browser")
     parser.set_defaults(func=cmd_view)
     return parser
