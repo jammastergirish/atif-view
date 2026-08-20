@@ -8,28 +8,19 @@ from pathlib import Path
 
 from atif_make import corpus
 from atif_make.archive import is_archive
-from atif_make.convert import AGENTS
-from atif_make.detect import detect_format
 
 from .viewer import serve
 
 
 def _single_entry(path: Path) -> list[corpus.Entry]:
-    """Wrap one file as an index entry so it can be viewed without indexing."""
-    stat = path.stat()
-    fmt = detect_format(path)
-    return [
-        corpus.Entry(
-            path=str(path),
-            format=fmt,
-            agent=AGENTS.get(fmt, "unknown"),
-            session_id=None,
-            project=str(path),
-            modified="",
-            size_bytes=stat.st_size,
-            subagents=0,
-        )
-    ]
+    """One file as an index entry, so it can be viewed without indexing.
+
+    Built by corpus.describe rather than assembled here: an Entry that is put
+    together in two places drifts the moment a field is added, and this one had
+    already fallen behind.
+    """
+    entry = corpus.describe(path)
+    return [entry] if entry else []
 
 
 def cmd_view(args: argparse.Namespace) -> int:

@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from atif_make.atif import ContentPart, Trajectory
 from atif_make import corpus
+from atif_make.archive import extract, is_archive
 from atif_make.convert import convert
 from atif_make.corpus import Entry, scan
 
@@ -33,7 +34,7 @@ from . import library
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Atif-View</title>
+<title>ATIF-View</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -73,19 +74,33 @@ PAGE = r"""<!doctype html>
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline;text-underline-offset:2px}
 a.gone{color:var(--faint);text-decoration:line-through}
-body{font:14px/1.55 var(--font-ui);background:var(--bg);color:var(--ink);display:flex;height:100vh;overflow:hidden}
+body{font:14px/1.55 var(--font-ui);background:var(--bg);color:var(--ink);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#shell{flex:1;display:flex;min-height:0}
 kbd,code,pre{font-family:var(--font-mono)}
 
 /* ---- sidebar ---- */
 #side{width:320px;flex:0 0 320px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
-#brand{padding:15px 16px 11px;display:flex;align-items:center;gap:9px}\n#brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}\n#brand small{font:500 10.5px var(--font-mono);color:var(--muted)}
+/* Diwan's header: 0 18px, one line, bordered below, on --panel. */
+#top{display:flex;align-items:center;gap:18px;padding:0 18px;height:52px;
+  border-bottom:1px solid var(--line);background:var(--panel);flex:none}
+#top .mark{font:600 18px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}
+#crumb{flex:1;min-width:0;display:flex;align-items:baseline;gap:10px;overflow:hidden;
+  font-size:13px;color:var(--muted)}
+#crumb b{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#crumb .back{cursor:pointer;color:var(--accent)}
+#theme{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:7px 10px;cursor:pointer;flex:none}
+#theme:hover{color:var(--ink)}
+#brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}\n#brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}\n#brand small{font:500 10.5px var(--font-mono);color:var(--muted)}
 #brand small{font-weight:400;color:var(--faint);font-size:11.5px}
 #themes{margin-left:auto;display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:20px;padding:1px;background:var(--surface)}
 #themes span{width:15px;height:15px;border-radius:50%;cursor:pointer;border:2px solid transparent}
 #themes span.on{border-color:var(--accent)}
-#brand button{margin-left:6px;border:1px solid var(--line);background:var(--panel);color:var(--dim);
-  border-radius:7px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
-#brand button:hover{background:var(--sunk);color:var(--ink);border-color:var(--accent)}
+#open{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:7px 10px;cursor:pointer;flex:none}
+#open:hover{color:var(--accent);border-color:var(--accent)}
 #drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
   display:none;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
   border:3px dashed var(--accent);pointer-events:none}
@@ -110,7 +125,7 @@ kbd,code,pre{font-family:var(--font-mono)}
 
 /* Sidebar toggle. The button is fixed rather than inside #main, which is
    replaced wholesale on every render. */
-#toggle{position:fixed;top:10px;left:280px;z-index:20;width:28px;height:28px;padding:0;
+#toggle{position:fixed;top:62px;left:176px;z-index:20;width:28px;height:28px;padding:0;
   border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--dim);
   font:inherit;font-size:15px;line-height:1;cursor:pointer;transition:left .15s ease}
 #toggle:hover{color:var(--ink);background:var(--sunk)}
@@ -297,11 +312,15 @@ pre.json{line-height:1.45}
 .more button:hover{background:var(--sunk);color:var(--ink)}
 </style>
 
+<header id="top">
+  <span class="mark">ATIF-View</span>
+  <div id="crumb"></div>
+  <button id="theme" onclick="cycleTheme()" title="Change theme"></button>
+  <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
+</header>
+<div id="shell">
 <div id="side">
-  <div id="brand"><span class="mark">Atif-View</span> <small id="count"></small>
-    <span id="themes" title="Paper · Cool · Dark"></span>
-    <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
-  </div>
+  <div id="brand"><small id="count"></small></div>
   <input id="picker" type="file" multiple hidden
          accept=".jsonl,.json,.har,.zip,.gz,.tgz,.bz2,.xz,.tar"
          onchange="openFiles(this.files)">
@@ -312,6 +331,7 @@ pre.json{line-height:1.45}
 </div>
 <button id="toggle" onclick="toggleSide()" title="Show/hide sessions (\\)" aria-label="Toggle sidebar">&lsaquo;</button>
 <div id="main"><div class="empty">Loading…</div></div>
+</div>
 
 <script>
 // Minimal Markdown renderer. Escapes first, then transforms, so no raw HTML
@@ -337,9 +357,10 @@ const anchor = (href, label) =>
   `<a href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>`;
 // Revealing happens server-side: Chrome refuses to follow file:// from an http
 // page, so the link calls back to the local server instead.
-const pathAnchor = (path) =>
+  // `label` is inserted as-is, so callers pass text they have already escaped.
+const pathAnchor = (path, label) =>
   `<a href="/api/reveal?path=${encodeURIComponent(path)}" onclick="return reveal(this)"` +
-  ` title="Reveal in Finder">${path}</a>`;
+  ` title="Reveal in Finder">${label === undefined ? path : label}</a>`;
 const autolink = (html) =>
   html
     .split(/(<a\b[^>]*>[\s\S]*?<\/a>|<[^>]+>)/g)
@@ -664,19 +685,18 @@ addEventListener("drop",e=>{
 addEventListener("dragend",()=>showDrop(false));
 addEventListener("mouseout",e=>{if(!e.relatedTarget&&dragDepth)showDrop(false)});
 
-const THEMES=[["paper","#f6f2ea","#b0522a"],["cool","#f1f4f6","#33689f"],["dark","#18161c","#d3894b"]];
+const THEMES=["paper","cool","dark"];
+const THEME_LABEL={paper:"PAPER",cool:"COOL",dark:"DARK"};
 
 function setTheme(name){
   document.documentElement.setAttribute("data-theme",name);
   try{localStorage.setItem("atif-view.theme",name)}catch(e){}
-  drawThemes();
+  if(typeof theme!=="undefined"&&theme)theme.textContent=THEME_LABEL[name]||name;
 }
 
-function drawThemes(){
+function cycleTheme(){
   const now=document.documentElement.getAttribute("data-theme")||"paper";
-  themes.innerHTML=THEMES.map(([name,bg,accent])=>
-    `<span class="${name===now?"on":""}" onclick="setTheme('${name}')" title="${name}"
-       style="background:linear-gradient(135deg,${bg} 55%,${accent} 55%)"></span>`).join("");
+  setTheme(THEMES[(THEMES.indexOf(now)+1)%THEMES.length]);
 }
 
 // Restore the chosen theme before anything paints, so there is no flash.
@@ -758,6 +778,16 @@ function drawList(){
 }
 
 const setCollection=p=>{collection=p;cur=null;drawList();showLibrary()};
+
+function drawCrumb(){
+  if(!crumb)return;
+  const here=collection==="__all"?"All sessions"
+    :collection==="__unfiled"?"Unfiled":collection;
+  crumb.innerHTML=cur
+    ? `<span class="back" onclick="showLibrary()">${esc(here)}</span>
+       <span>/</span><b>${esc(titleOf(INDEX.find(e=>e.key===cur)||{}))}</b>`
+    : `<b>${esc(here)}</b>`;
+}
 const toggleFolder=p=>{EXPANDED[p]=!EXPANDED[p];
   try{localStorage.setItem("atif-view.folders",JSON.stringify(EXPANDED))}catch(e){}
   drawList()};
@@ -787,7 +817,7 @@ const titleOf=e=>e.title||short(e.project||e.session_id||e.path);
 /* Diwan shares one grid template between the header and every row so the
    columns line up; the same trick, with the columns this corpus has. */
 function showLibrary(){
-  cur=null;
+  cur=null;drawCrumb();
   const rows=libraryRows();
   main.innerHTML=`
     <div class="lhead">
@@ -888,7 +918,7 @@ function fileInto(key){
 }
 
 function pick(key){
-  cur=key;EDITING=null;drawList();
+  cur=key;EDITING=null;drawList();drawCrumb();
   main.innerHTML=`<div class="empty">Converting…</div>`;
   fetch("/api/trajectory?id="+encodeURIComponent(key)).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}
@@ -964,7 +994,7 @@ function jump(pos,id){
 }
 
 function render(){
-  const t=traj,e=INDEX[cur],m=t.final_metrics||{},a=t.agent||{};
+  const t=traj,e=INDEX.find(x=>x.key===cur)||{},m=t.final_metrics||{},a=t.agent||{};
   const branches=branchIndex(t);
   const branchSteps=new Set(branches.map(b=>b.stepIndex));
   const q=query.trim().toLowerCase();
@@ -981,6 +1011,8 @@ function render(){
     </div>
     <div class="stats">
       ${stat(t.steps.length,"steps")}
+      ${(()=>{const d=duration(spanOf(t.steps));
+         return d?`<div class="stat"><b>${d}</b><span>duration</span></div>`:""})()}
       ${stat(counts.tools,"tool turns")}
       ${stat(counts.reasoning,"reasoning")}
       ${branches.length?stat(branches.length,"branches"):""}
@@ -1052,12 +1084,35 @@ function panelTab(){
   }
   if(!d.length)return `<div class="empty">No associated files.</div>`;
   return `<table class="files"><thead><tr><th>File</th><th>Role</th><th>Size</th></tr></thead><tbody>${
-    d.map(f=>`<tr><td><a href="/api/reveal?path=${encodeURIComponent(f.path)}"
-        onclick="return reveal(this)" title="Reveal in Finder">${esc(f.name)}</a></td>
+    d.map(f=>`<tr><td>${pathAnchor(f.path,esc(f.name))}</td>
       <td><span class="pill">${esc(f.role)}</span></td>
       <td>${(f.size/1024).toFixed(0)} KB</td></tr>`).join("")}</tbody></table>`;
 }
 const RAW_KB=512;
+
+/* Elapsed time from the first step to the last. Sessions here run from seconds
+   to weeks, so the unit follows the span rather than fixing on one. */
+function spanOf(steps){
+  const times=steps.map(s=>s.timestamp).filter(Boolean).map(t=>Date.parse(t))
+    .filter(n=>!Number.isNaN(n));
+  if(times.length<2)return null;
+  const ms=Math.max(...times)-Math.min(...times);
+  return ms>0?ms:null;
+}
+
+function duration(ms){
+  if(ms==null)return null;
+  const s=ms/1000;
+  if(s<90)return Math.round(s)+"s";
+  const m=s/60;
+  if(m<90)return Math.round(m)+"m";
+  const h=m/60;
+  if(h<48)return (h<10?h.toFixed(1):Math.round(h))+"h";
+  const d=h/24;
+  if(d<14)return (d<10?d.toFixed(1):Math.round(d))+"d";
+  const w=d/7;
+  return (w<10?w.toFixed(1):Math.round(w))+"w";
+}
 
 const stat=(v,l)=>v==null?"":`<div class="stat"><b>${num(v)}</b><span>${l}</span></div>`;
 
@@ -1199,10 +1254,8 @@ RAW_LIMIT = 512 * 1024
 # stray multi-gigabyte archive from filling the disk, not to be restrictive.
 UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 
-# Opened files live beside the index rather than in a temp directory: a name
-# or folder you gave one is worthless if the file it describes disappears when
-# the viewer stops.
-OPENED_DIR = Path.home() / ".atif" / "opened"
+# Where opened files live. atif-make owns the location because it also has to
+# recognise one during a scan; a second constant here could drift from it.
 
 
 def _safe_name(raw: str) -> str:
@@ -1294,7 +1347,7 @@ class _Handler(BaseHTTPRequestHandler):
         removed_copy = False
         if entry is not None and entry.origin == "opened":
             source = Path(entry.path)
-            if OPENED_DIR in source.parents:
+            if corpus.OPENED_ROOT in source.parents:
                 shutil.rmtree(source.parent, ignore_errors=True)
                 removed_copy = True
             with self.lock:
@@ -1361,11 +1414,23 @@ class _Handler(BaseHTTPRequestHandler):
 
         # Derive the identity before choosing where it lands, so re-opening the
         # same file updates its place instead of accumulating copies.
-        target = OPENED_DIR / corpus.content_key(staged) / name
+        home = corpus.OPENED_ROOT / corpus.content_key(staged)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(staged), target)
-        except OSError as exc:
+            home.mkdir(parents=True, exist_ok=True)
+            if is_archive(staged):
+                # Keep what is inside, not the container: the logs are what get
+                # indexed, and unpacking here keeps their paths stable and any
+                # sibling images resolvable. Storing the zip would mean
+                # re-extracting to a temp directory on every start.
+                unpacked = extract(staged)
+                for item in unpacked.iterdir():
+                    shutil.move(str(item), home / item.name)
+                target = home
+            else:
+                target = home / name
+                shutil.move(str(staged), target)
+        except (OSError, ValueError) as exc:
+            shutil.rmtree(home, ignore_errors=True)
             self._json({"error": f"could not store upload: {exc}"}, 500)
             return
         finally:
@@ -1376,13 +1441,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             found = scan([target], origin="opened")
         except (ValueError, OSError) as exc:
-            shutil.rmtree(target.parent, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
             self._json({"error": str(exc)}, 400)
             return
         if not found:
             # Nothing usable in it — do not keep the copy around.
-            shutil.rmtree(target.parent, ignore_errors=True)
-            self._json({"error": f"nothing convertible in {target.name}"}, 415)
+            shutil.rmtree(home, ignore_errors=True)
+            self._json({"error": f"nothing convertible in {name}"}, 415)
             return
 
         with self.lock:

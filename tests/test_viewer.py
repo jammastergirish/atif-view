@@ -37,7 +37,7 @@ def isolate(tmp_path, monkeypatch):
     from atif_view import library, viewer
 
     monkeypatch.setattr(library, "LIBRARY_PATH", tmp_path / "library.json")
-    monkeypatch.setattr(viewer, "OPENED_DIR", tmp_path / "opened")
+    monkeypatch.setattr(corpus, "OPENED_ROOT", tmp_path / "opened")
     monkeypatch.setattr(corpus, "INDEX_PATH", tmp_path / "index.json")
 
 
@@ -69,7 +69,7 @@ def server(tmp_path):
 def test_serves_the_page(server):
     status, body = _get(server + "/")
     assert status == 200
-    assert b"<title>Atif-View</title>" in body
+    assert b"<title>ATIF-View</title>" in body
 
 
 def test_index_lists_the_session(server):
@@ -404,3 +404,39 @@ def test_deleting_an_opened_session_removes_its_copy(server):
 
     assert not stored.exists()
     assert key not in {r["key"] for r in _sessions(server)}
+
+
+def test_an_opened_archive_is_unpacked_rather_than_stored_whole(server, tmp_path):
+    """Storing the container would mean re-extracting to a temp directory on
+    every start, and a directory scan does not look inside archives."""
+    import zipfile
+
+    bundle = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr(
+            "inner.jsonl", LOG.replace('"session_id": "c"', '"session_id": "inner"')
+        )
+        archive.writestr("manifest.json", '{"note": "travels with it"}')
+
+    _, result = _post(server + "/api/open", bundle.read_bytes(), "bundle.zip")
+    assert result["added"] == 1
+
+    from atif_make import corpus
+
+    stored = sorted(p.name for p in corpus.OPENED_ROOT.rglob("*") if p.is_file())
+    assert "inner.jsonl" in stored
+    assert "manifest.json" in stored          # siblings travel with it
+    assert not any(n.endswith(".zip") for n in stored)
+
+
+def test_an_opened_file_survives_a_rescan_of_the_default_roots(server, tmp_path):
+    """A rescan replaces the index; anything brought in by hand must persist."""
+    from atif_make import corpus
+
+    payload = LOG.replace('"session_id": "c"', '"session_id": "persist"').encode()
+    _post(server + "/api/open", payload, "persist.jsonl")
+
+    kept = [e for e in corpus.load() if e.origin == "opened"]
+    assert kept, "the opened file was not written to the index"
+    # Its location alone is enough to classify it on a fresh look.
+    assert corpus.describe(Path(kept[0].path)).origin == "opened"

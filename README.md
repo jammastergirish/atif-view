@@ -44,8 +44,10 @@ fact about where the file came from.
 
 ## Themes
 
-Three, from Diwan: `paper`, `cool` (both light) and `dark`, switched from the
-swatches beside the wordmark and remembered per browser.
+Three, from Diwan: `paper`, `cool` (both light) and `dark`. The control in the
+top bar cycles them, as Diwan's own header does, and the choice is remembered
+per browser. Note that "light and dark" is really three modes here — two of
+Diwan's palettes are light.
 
 ## What it shows
 
@@ -94,6 +96,10 @@ same `corpus.scan()` the CLI uses, so the button and `atif-view <path>` can
 never disagree about what counts as openable — logs, converted trajectories and
 archives all work. A client-supplied filename is reduced to a leaf before
 anything is written, and uploads live in a temporary directory for the session.
+
+**Duration.** Each trajectory reports how long it actually ran, from the first
+step's timestamp to the last, in whatever unit fits — these range from seconds
+to `63h` across two and a half days.
 
 **Finding things.** A run of several thousand steps needs more than scrolling.
 `Search this run` matches across message text, reasoning, tool names, tool
@@ -158,5 +164,14 @@ get.
 uv run pytest
 ```
 
+While changing `atif-make` at the same time, run against the local converter or
+the tests will resolve the published one:
+
+```sh
+uv run --with-editable ../atif-make pytest
+```
+
 The suite starts a real server on an ephemeral port and exercises the endpoints,
-including that it binds loopback only.
+including that it binds loopback only. It is isolated from your own library,
+index and opened-file store — a frozen default argument once let it write to
+them, so there is a test for that too.
