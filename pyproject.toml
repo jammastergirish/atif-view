@@ -1,13 +1,15 @@
 [project]
 name = "atif-view"
-version = "0.1.0"
+version = "0.2.0"
 description = "Browse ATIF v1.7 trajectories in a local, dependency-free web viewer."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 # The only dependency is the converter. The viewer itself is stdlib http.server
 # plus one self-contained HTML page.
-dependencies = ["atif-make>=0.1.0"]
+# 0.2.0 is the floor, not politeness: Entry gained the content key this
+# viewer addresses sessions by, so an older atif-make crashes on the index.
+dependencies = ["atif-make>=0.2.0"]
 
 [project.scripts]
 atif-view = "atif_view.cli:main"

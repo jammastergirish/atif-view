@@ -838,7 +838,8 @@ function libraryRow(e){
   const title=editing==="title"
     ? `<input class="inline" value="${esc(e.title||titleOf(e))}" autofocus
          onkeydown="titleKey(event,'${e.key}')" onblur="stopEdit()">`
-    : `<span class="tt" ondblclick="startEdit('${e.key}','title')">${esc(titleOf(e))}</span>`;
+    : `<span class="tt" onclick="titleClick(event,'${e.key}')"
+         ondblclick="startEdit('${e.key}','title')">${esc(titleOf(e))}</span>`;
   return `<div class="tgrid trow" onclick="openRow(event,'${e.key}')">
     <span class="marks">
       ${e.starred?`<svg class="star" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`:""}
@@ -864,8 +865,18 @@ function libraryRow(e){
 }
 
 function openRow(event,key){
-  if(event.target.closest("input,button,.tt"))return;
+  if(event.target.closest("input,button"))return;
   pick(key);
+}
+
+/* Diwan's LibraryRow pattern: a single click on the title opens after a beat,
+   and a second click inside that beat cancels it and renames instead. Without
+   this the title either swallowed the click or opened on the way to renaming. */
+let CLICK_TIMER=null;
+function titleClick(event,key){
+  event.stopPropagation();
+  if(CLICK_TIMER){clearTimeout(CLICK_TIMER);CLICK_TIMER=null;return}
+  CLICK_TIMER=setTimeout(()=>{CLICK_TIMER=null;pick(key)},220);
 }
 
 // ---- annotation -------------------------------------------------------------
@@ -884,7 +895,10 @@ async function refreshIndex(){
   if(!cur)showLibrary();
 }
 
-const startEdit=(key,field)=>{EDITING={key,field};showLibrary()};
+const startEdit=(key,field)=>{
+  if(CLICK_TIMER){clearTimeout(CLICK_TIMER);CLICK_TIMER=null}
+  EDITING={key,field};showLibrary();
+};
 const stopEdit=()=>{EDITING=null;showLibrary()};
 
 function titleKey(event,key){
