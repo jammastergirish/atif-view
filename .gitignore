@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Never commit converted transcripts — they contain real session content.
+*.trajectory.json
