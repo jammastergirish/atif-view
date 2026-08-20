@@ -1,0 +1,35 @@
+name: publish
+
+# Publishes to PyPI when a version tag is pushed:
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# Authentication uses PyPI Trusted Publishing (OIDC), so no API token is stored
+# anywhere. GitHub mints a short-lived identity for this workflow and PyPI
+# verifies it against the publisher configured for the project.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for trusted publishing; nothing else needs write access.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Refuse to publish a tag that disagrees with the version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(uv version --short)
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $tag does not match project version $pkg" >&2
+            exit 1
+          fi
+
+      - run: uv build
+      - run: uv publish --trusted-publishing always

@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 # Never commit converted transcripts — they contain real session content.
 *.trajectory.json
+dist/

@@ -15,8 +15,9 @@ atif-viewer = "atif_viewer.cli:main"
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
-# atif-make is not on PyPI, so resolve it from its repository. The two move
-# together, so track `main` rather than pinning a release.
+# The two packages move together, so track atif-make's `main` rather than a
+# release. Once atif-make is on PyPI you can delete this block entirely: the
+# `dependencies` entry above already resolves from the index.
 #
 # uv still records an exact commit in uv.lock, which is what keeps a given
 # checkout reproducible. To pick up newer atif-make commits, re-resolve:

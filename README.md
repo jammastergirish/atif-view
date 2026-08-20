@@ -3,14 +3,13 @@
 Browse [ATIF v1.7](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
 trajectories in a local web viewer.
 
-Conversion lives in [`atif-make`](../atif-make); this package depends on it and
+Conversion lives in [`atif-make`](https://github.com/jammastergirish/atif-make); this package depends on it and
 adds only the browser interface.
 
 ## Install
 
 ```sh
-git clone <repo> && cd atif-viewer
-uv tool install .        # pulls atif-make automatically
+uv tool install atif-viewer        # pulls atif-make automatically
 ```
 
 ```sh
