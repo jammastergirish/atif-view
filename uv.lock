@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 [[package]]
 name = "atif-make"
 version = "0.1.0"
-source = { git = "https://github.com/jammastergirish/atif-make?branch=main#e01b48a0a4eb611ef29c3530a69bda46e91607a8" }
+source = { git = "https://github.com/jammastergirish/atif-make?branch=main#e308ad74a2f9dcbacbb18fe936178e90c75174c3" }
 
 [[package]]
 name = "atif-view"

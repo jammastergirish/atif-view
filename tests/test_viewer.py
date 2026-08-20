@@ -30,6 +30,17 @@ def _get(url: str):
         return response.status, response.read()
 
 
+@pytest.fixture(autouse=True)
+def isolate(tmp_path, monkeypatch):
+    """Never let a test touch the real library, index or opened-file store."""
+    from atif_make import corpus
+    from atif_view import library, viewer
+
+    monkeypatch.setattr(library, "LIBRARY_PATH", tmp_path / "library.json")
+    monkeypatch.setattr(viewer, "OPENED_DIR", tmp_path / "opened")
+    monkeypatch.setattr(corpus, "INDEX_PATH", tmp_path / "index.json")
+
+
 @pytest.fixture
 def server(tmp_path):
     log = tmp_path / "session.jsonl"
@@ -62,14 +73,23 @@ def test_serves_the_page(server):
 
 
 def test_index_lists_the_session(server):
-    _, body = _get(server + "/api/index")
-    rows = json.loads(body)
+    rows = _sessions(server)
     assert len(rows) == 1
     assert rows[0]["agent"] == "codex"
+    # Annotations arrive folded in, so the client never has to join.
+    assert rows[0]["title"] == "" and rows[0]["tags"] == []
+
+
+def _index(server: str) -> dict:
+    return json.loads(_get(server + "/api/index")[1])
+
+
+def _sessions(server: str) -> list:
+    return _index(server)["sessions"]
 
 
 def _first_key(server: str) -> str:
-    return json.loads(_get(server + "/api/index")[1])[0]["key"]
+    return _sessions(server)[0]["key"]
 
 
 def test_converts_on_demand(server):
@@ -228,6 +248,15 @@ def test_bad_index_on_new_endpoints(server):
         assert caught.value.code == 404
 
 
+def _post_json(url: str, body: dict):
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status, json.loads(response.read())
+
+
 def _post(url: str, data: bytes, filename: str):
     request = urllib.request.Request(
         url, data=data, method="POST", headers={"X-Filename": filename}
@@ -238,11 +267,12 @@ def _post(url: str, data: bytes, filename: str):
 
 def test_open_adds_an_uploaded_log_to_the_index(server):
     """The Open button must add exactly what the CLI would."""
-    before = len(json.loads(_get(server + "/api/index")[1]))
-    status, result = _post(server + "/api/open", LOG.encode(), "dropped.jsonl")
+    before = len(_sessions(server))
+    other = LOG.replace('"session_id": "c"', '"session_id": "dropped"')
+    status, result = _post(server + "/api/open", other.encode(), "dropped.jsonl")
     assert status == 200
     assert result["added"] == 1
-    after = json.loads(_get(server + "/api/index")[1])
+    after = _sessions(server)
     assert len(after) == before + 1
     # And it is immediately viewable, not merely listed.
     _, body = _get(server + f"/api/trajectory?id={result['keys'][0]}")
@@ -267,7 +297,7 @@ def test_open_neutralises_a_traversing_filename(server, tmp_path):
         server + "/api/open", LOG.encode(), "../../../../tmp/escaped.jsonl"
     )
     assert status == 200
-    rows = {r["key"]: r for r in json.loads(_get(server + "/api/index")[1])}
+    rows = {r["key"]: r for r in _sessions(server)}
     landed = Path(rows[result["keys"][0]]["path"])
     assert landed.name == "escaped.jsonl"
     assert "/tmp/escaped.jsonl" != str(landed)
@@ -290,7 +320,7 @@ def test_open_is_the_only_post_route(server):
 
 def test_reordering_the_index_does_not_change_what_a_link_opens(server):
     """The whole point of content keys: a link survives the list moving."""
-    rows = json.loads(_get(server + "/api/index")[1])
+    rows = _sessions(server)
     key = rows[0]["key"]
     _, before = _get(server + f"/api/trajectory?id={key}")
 
@@ -299,3 +329,78 @@ def test_reordering_the_index_does_not_change_what_a_link_opens(server):
     _Handler.entries = list(reversed(_Handler.entries)) + list(_Handler.entries)
     _, after = _get(server + f"/api/trajectory?id={key}")
     assert json.loads(before)["session_id"] == json.loads(after)["session_id"]
+
+
+def test_opening_the_same_file_twice_updates_rather_than_duplicates(server):
+    """Content keys mean a file re-opened from a new place is still one entry."""
+    payload = LOG.replace('"session_id": "c"', '"session_id": "twice"').encode()
+    _post(server + "/api/open", payload, "first-name.jsonl")
+    before = len(_sessions(server))
+    _post(server + "/api/open", payload, "renamed.jsonl")
+    assert len(_sessions(server)) == before
+
+
+def test_opened_files_are_marked_and_stored_outside_temp(server):
+    payload = LOG.replace('"session_id": "c"', '"session_id": "kept"').encode()
+    _, result = _post(server + "/api/open", payload, "kept.jsonl")
+    row = {r["key"]: r for r in _sessions(server)}[result["keys"][0]]
+    assert row["origin"] == "opened"
+    assert Path(row["path"]).is_file()
+    # Under the opened store, keyed by content — not a temp directory.
+    assert result["keys"][0] in row["path"]
+
+
+def test_annotating_a_session_persists_and_comes_back_in_the_index(server):
+    key = _first_key(server)
+    status, record = _post_json(server + "/api/library", {
+        "key": key, "title": "SOC2 web app", "folder": "Redwood/SOC2",
+        "tags": ["security", "needs-review"], "starred": True,
+    })
+    assert status == 200
+    assert record["title"] == "SOC2 web app"
+
+    index = _index(server)
+    row = {r["key"]: r for r in index["sessions"]}[key]
+    assert row["title"] == "SOC2 web app"
+    assert row["tags"] == ["security", "needs-review"]
+    # The rail and filter bar are served alongside, already aggregated.
+    assert index["folders"] == ["Redwood", "Redwood/SOC2"]
+    assert {t["name"]: t["count"] for t in index["tags"]} == {
+        "security": 1, "needs-review": 1,
+    }
+
+
+def test_annotating_without_a_key_is_rejected(server):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post_json(server + "/api/library", {"title": "orphan"})
+    assert caught.value.code == 400
+
+
+def test_deleting_annotations_keeps_a_scanned_session(server):
+    key = _first_key(server)
+    _post_json(server + "/api/library", {"key": key, "title": "Named"})
+    request = urllib.request.Request(
+        server + f"/api/library?id={key}", method="DELETE"
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert response.status == 200
+    rows = {r["key"]: r for r in _sessions(server)}
+    # The transcript is still there — only what we said about it is gone.
+    assert key in rows and rows[key]["title"] == ""
+
+
+def test_deleting_an_opened_session_removes_its_copy(server):
+    payload = LOG.replace('"session_id": "c"', '"session_id": "removable"').encode()
+    _, result = _post(server + "/api/open", payload, "removable.jsonl")
+    key = result["keys"][0]
+    stored = Path({r["key"]: r for r in _sessions(server)}[key]["path"])
+    assert stored.is_file()
+
+    request = urllib.request.Request(
+        server + f"/api/library?id={key}", method="DELETE"
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert json.loads(response.read())["removed_copy"] is True
+
+    assert not stored.exists()
+    assert key not in {r["key"] for r in _sessions(server)}

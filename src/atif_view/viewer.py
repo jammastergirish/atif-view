@@ -25,8 +25,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from atif_make.atif import ContentPart, Trajectory
+from atif_make import corpus
 from atif_make.convert import convert
 from atif_make.corpus import Entry, scan
+
+from . import library
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -519,7 +522,7 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const num=n=>(n??0).toLocaleString();
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],cur=null,traj=null,show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
+let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null;
 
 function reveal(a){
@@ -549,7 +552,8 @@ async function openFiles(files){
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
-  INDEX=fresh;count.textContent=fresh.length+" sessions";drawList();
+  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];
+  count.textContent=INDEX.length+" sessions";drawList();
   if(first!==null)pick(first);
   if(problems.length)note(problems.join("\n"));
   picker.value="";
@@ -601,7 +605,8 @@ addEventListener("keydown",e=>{
 });
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
-  INDEX=d;count.textContent=d.length+" sessions";drawList();
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];
+  count.textContent=INDEX.length+" sessions";drawList();
 });
 q.oninput=drawList;
 
@@ -936,7 +941,10 @@ RAW_LIMIT = 512 * 1024
 # stray multi-gigabyte archive from filling the disk, not to be restrictive.
 UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 
-_uploads = tempfile.TemporaryDirectory(prefix="atif-view-open-")
+# Opened files live beside the index rather than in a temp directory: a name
+# or folder you gave one is worthless if the file it describes disappears when
+# the viewer stops.
+OPENED_DIR = Path.home() / ".atif" / "opened"
 
 
 def _safe_name(raw: str) -> str:
@@ -1010,8 +1018,57 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return next((e for e in self.entries if e.key == key), None)
 
+    def do_DELETE(self) -> None:
+        url = urlparse(self.path)
+        if url.path != "/api/library":
+            self.send_error(404)
+            return
+        key = (parse_qs(url.query).get("id") or [""])[0]
+        if not key:
+            self._json({"error": "a key is required"}, 400)
+            return
+
+        entry = next((e for e in self.entries if e.key == key), None)
+        library.remove(key)
+
+        # An opened file only exists because it was brought in; forgetting it
+        # should not leave a stray copy on disk. A scanned file is not ours.
+        removed_copy = False
+        if entry is not None and entry.origin == "opened":
+            source = Path(entry.path)
+            if OPENED_DIR in source.parents:
+                shutil.rmtree(source.parent, ignore_errors=True)
+                removed_copy = True
+            with self.lock:
+                self.entries = [e for e in self.entries if e.key != key]
+                _Handler.entries = self.entries
+            corpus.save(self.entries)
+        self._json({"removed": True, "removed_copy": removed_copy})
+
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/open":
+        url = urlparse(self.path)
+
+        if url.path == "/api/library":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            key = body.get("key")
+            if not isinstance(key, str) or not key:
+                self._json({"error": "a key is required"}, 400)
+                return
+            fields = {k: v for k, v in body.items() if k != "key"}
+            try:
+                record = library.update(key, **fields)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+                return
+            self._json({"key": key, **record})
+            return
+
+        if url.path != "/api/open":
             self.send_error(404)
             return
 
@@ -1027,10 +1084,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"error": f"file is larger than {UPLOAD_LIMIT // 1024 ** 3} GB"}, 413)
             return
 
-        target = Path(_uploads.name) / _safe_name(self.headers.get("X-Filename", ""))
+        name = _safe_name(self.headers.get("X-Filename", ""))
+        staging = Path(tempfile.mkdtemp(prefix="atif-open-"))
+        staged = staging / name
         try:
             remaining = length
-            with target.open("wb") as handle:
+            with staged.open("wb") as handle:
                 while remaining > 0:
                     chunk = self.rfile.read(min(1 << 20, remaining))
                     if not chunk:
@@ -1038,22 +1097,42 @@ class _Handler(BaseHTTPRequestHandler):
                     handle.write(chunk)
                     remaining -= len(chunk)
         except OSError as exc:
+            shutil.rmtree(staging, ignore_errors=True)
             self._json({"error": f"could not save upload: {exc}"}, 500)
             return
+
+        # Derive the identity before choosing where it lands, so re-opening the
+        # same file updates its place instead of accumulating copies.
+        target = OPENED_DIR / corpus.content_key(staged) / name
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), target)
+        except OSError as exc:
+            self._json({"error": f"could not store upload: {exc}"}, 500)
+            return
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
         # Exactly what `atif-view <path>` and `atif-make index` do: the CLI and
         # this button must never disagree about what counts as openable.
         try:
-            found = scan([target])
+            found = scan([target], origin="opened")
         except (ValueError, OSError) as exc:
+            shutil.rmtree(target.parent, ignore_errors=True)
             self._json({"error": str(exc)}, 400)
             return
         if not found:
+            # Nothing usable in it — do not keep the copy around.
+            shutil.rmtree(target.parent, ignore_errors=True)
             self._json({"error": f"nothing convertible in {target.name}"}, 415)
             return
 
         with self.lock:
-            self.entries.extend(found)
+            merged = corpus.merge(self.entries, found)
+            self.entries = merged
+            _Handler.entries = merged
+        # Persist so an opened file is present next start without a re-scan.
+        corpus.save(merged)
         self._json({
             "added": len(found),
             "keys": [e.key for e in found],
@@ -1091,7 +1170,12 @@ class _Handler(BaseHTTPRequestHandler):
                 }
                 for e in self.entries
             ]
-            self._send(json.dumps(rows).encode(), "application/json")
+            payload = {
+                "sessions": library.decorate(rows),
+                "folders": library.folders(),
+                "tags": [{"name": t, "count": n} for t, n in library.tags()],
+            }
+            self._send(json.dumps(payload).encode(), "application/json")
             return
 
         if url.path == "/api/reveal":
