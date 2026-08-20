@@ -22,6 +22,31 @@ atif-view --port 8080 --no-open
 Build the index first with `atif-make index`, or point the viewer at a file,
 directory or archive and it will scan that instead.
 
+## The library
+
+Sessions are organised, not just listed. Rename one, file it into a collection
+(nested with `/`), tag it across collections, star it. The collection rail on
+the left rolls counts up the tree; the filter bar narrows by tag, or to files
+you opened yourself.
+
+Annotations live in `~/.atif/library.json`, keyed by a hash of the file's
+content rather than its path — so a name survives the transcript moving, and a
+full re-index can never destroy one. What a transcript *is* stays in
+`atif-make`'s index; what you decided about it stays here.
+
+Files you open are copied into `~/.atif/opened/`, so they outlast the viewer and
+can be organised like anything else. Deleting one removes its copy; deleting a
+scanned session only forgets the annotation, never the transcript.
+
+**Provenance is recorded, not applied.** A transcript you opened carries a quiet
+tray mark — never a tag pill, because that is a label *you* chose and this is a
+fact about where the file came from.
+
+## Themes
+
+Three, from Diwan: `paper`, `cool` (both light) and `dark`, switched from the
+swatches beside the wordmark and remembered per browser.
+
 ## What it shows
 
 ```sh

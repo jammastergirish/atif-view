@@ -33,34 +33,57 @@ from . import library
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>atif-view</title>
+<title>Atif-View</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-:root{
-  --bg:#faf9f7; --panel:#fff; --sunk:#f3f1ed; --ink:#191817; --dim:#6f6a63; --faint:#9a948c;
-  --line:#e6e1d9; --user:#1d4ed8; --agent:#6d28d9; --system:#0f766e; --tool:#b45309;
-  --accent:#0f766e; --shadow:0 1px 2px rgba(0,0,0,.05);
-  --user-bg:#eef3fd; --agent-bg:#f5f1fd; --system-bg:#ecf6f4;
-  --j-key:#0550ae; --j-str:#0a7d3f; --j-num:#b45309; --j-lit:#8b2fc9;
+/* Diwan's design tokens, verbatim from www/frontend/src/index.css.
+   Three themes, not two: `paper` and `cool` are both light. */
+:root,:root[data-theme="paper"]{
+  --bg:#f6f2ea; --surface:#fffdf8; --panel:#faf6ee; --ink:#241f18;
+  --muted:#7d7466; --line:#e5ddcd; --accent:#b0522a;
+  --soft:rgba(176,82,42,.09); --hl:rgba(233,180,76,.3);
+  --shadow:0 1px 2px rgba(60,45,20,.08), 0 8px 28px rgba(60,45,20,.1);
 }
-@media(prefers-color-scheme:dark){:root{
-  --bg:#141417; --panel:#1c1c20; --sunk:#232329; --ink:#eceae6; --dim:#a09a92; --faint:#6f6a63;
-  --line:#2e2e35; --user:#7ea6ff; --agent:#c4b5fd; --system:#5eead4; --tool:#fbbf24;
-  --accent:#5eead4; --shadow:none;
-  --user-bg:#182231; --agent-bg:#221d33; --system-bg:#15272a;
-  --j-key:#8fb6ff; --j-str:#6ee7a8; --j-num:#fbbf24; --j-lit:#d3bcff;
-}}
+:root[data-theme="cool"]{
+  --bg:#f1f4f6; --surface:#ffffff; --panel:#f7fafb; --ink:#171c22;
+  --muted:#68737f; --line:#dbe2e9; --accent:#33689f;
+  --soft:rgba(51,104,159,.09); --hl:rgba(116,169,222,.28);
+  --shadow:0 1px 2px rgba(20,40,60,.08), 0 8px 28px rgba(20,40,60,.1);
+}
+:root[data-theme="dark"]{
+  --bg:#18161c; --surface:#232028; --panel:#1d1b22; --ink:#eae4d8;
+  --muted:#948d80; --line:#332f3a; --accent:#d3894b;
+  --soft:rgba(211,137,75,.13); --hl:rgba(211,137,75,.25);
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
+}
+:root{
+  --font-ui:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  --font-serif:Newsreader,Georgia,serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  /* Roles the trajectory view needs that Diwan has no token for. Derived from
+     its palette so they stay in family across all three themes. */
+  --dim:var(--muted); --faint:var(--muted); --sunk:var(--bg);
+  --user:var(--accent); --agent:var(--ink); --system:var(--muted); --tool:var(--accent);
+  --user-bg:var(--soft); --agent-bg:transparent; --system-bg:transparent;
+  --j-key:var(--accent); --j-str:var(--ink); --j-num:var(--muted); --j-lit:var(--muted);
+}
 *{box-sizing:border-box;margin:0}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline;text-underline-offset:2px}
 a.gone{color:var(--faint);text-decoration:line-through}
-body{font:14.5px/1.6 ui-sans-serif,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;height:100vh;overflow:hidden}
-kbd,code,pre{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+body{font:14px/1.55 var(--font-ui);background:var(--bg);color:var(--ink);display:flex;height:100vh;overflow:hidden}
+kbd,code,pre{font-family:var(--font-mono)}
 
 /* ---- sidebar ---- */
 #side{width:320px;flex:0 0 320px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
-#brand{padding:16px 16px 10px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+#brand{padding:15px 16px 11px;display:flex;align-items:center;gap:9px}\n#brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}\n#brand small{font:500 10.5px var(--font-mono);color:var(--muted)}
 #brand small{font-weight:400;color:var(--faint);font-size:11.5px}
-#brand button{margin-left:auto;border:1px solid var(--line);background:var(--panel);color:var(--dim);
+#themes{margin-left:auto;display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:20px;padding:1px;background:var(--surface)}
+#themes span{width:15px;height:15px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+#themes span.on{border-color:var(--accent)}
+#brand button{margin-left:6px;border:1px solid var(--line);background:var(--panel);color:var(--dim);
   border-radius:7px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
 #brand button:hover{background:var(--sunk);color:var(--ink);border-color:var(--accent)}
 #drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
@@ -100,6 +123,52 @@ body.hide-side #main{padding-left:52px}
 .stats{display:flex;gap:26px;flex-wrap:wrap;padding:16px 0 18px;margin:16px 0 22px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .stat span{color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em}
+/* ---- collection rail (Diwan's collectionTree, flattened) ---- */
+#side{width:212px;flex:0 0 212px}
+#tagbar{padding:0 14px 10px;display:flex;gap:4px;flex-wrap:wrap}
+.rail{display:flex;align-items:center;gap:6px;padding:5px 12px 5px 10px;cursor:pointer;
+  font-size:12.5px;border-left:2px solid transparent;color:var(--ink)}
+.rail:hover{background:var(--bg)}
+.rail.on{background:var(--soft);border-left-color:var(--accent);color:var(--accent)}
+.rail .rl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail .rc{font:500 10px var(--font-mono);color:var(--muted)}
+.caret{width:10px;display:inline-flex;color:var(--muted);opacity:.75;
+  transition:transform .12s ease}
+.caret.open{transform:rotate(90deg)}
+.pill.tag{background:var(--soft);color:var(--accent);border:none;border-radius:20px;
+  padding:1px 8px;font-size:10.5px;cursor:pointer;display:inline-flex;gap:5px;align-items:baseline}
+.pill.tag b{font:600 9.5px var(--font-mono);opacity:.75}
+.pill.tag.on{background:var(--accent);color:var(--surface)}
+.pill.origin{border:1px solid var(--line);color:var(--muted);border-radius:20px;
+  padding:1px 8px;font:500 10px var(--font-mono);cursor:pointer;background:transparent}
+.pill.origin.on{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+
+/* ---- library table (Diwan's LibraryRow grid) ---- */
+.lhead{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.lhead h2{font:600 19px var(--font-serif);letter-spacing:-.01em}
+.mono{font:500 10.5px var(--font-mono);color:var(--muted)}
+.tgrid{display:grid;
+  grid-template-columns:34px minmax(180px,2.4fr) 88px 84px 68px minmax(90px,1fr) 76px;
+  gap:10px;align-items:center}
+.thead{padding:6px 10px;border-bottom:1px solid var(--line);
+  font:600 9.5px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.trow{padding:10px;border-bottom:1px solid var(--line);cursor:pointer}
+.trow:hover{background:var(--panel)}
+.trow:hover .acts{opacity:1}
+.tcell{min-width:0;overflow:hidden}
+.tt{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;display:block}
+.tags{display:flex;gap:4px;flex-wrap:nowrap;overflow:hidden}
+.marks{display:flex;gap:4px;align-items:center;color:var(--muted)}
+.marks .star{color:var(--accent)}
+.inline{border:1px solid var(--accent);border-radius:5px;background:var(--surface);
+  color:var(--ink);padding:2px 6px;font:inherit;font-size:13px;width:100%}
+.inline.tagin{border-radius:20px;font-size:11px;width:86px}
+.acts{display:flex;gap:1px;opacity:0;transition:opacity .12s ease}
+.acts button{background:none;border:none;color:var(--muted);cursor:pointer;
+  font-size:12px;padding:2px 4px;border-radius:5px;line-height:1}
+.acts button:hover{color:var(--accent);background:var(--soft)}
+
 /* tabs */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 18px}
 .tab{padding:7px 14px;font-size:13px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
@@ -229,18 +298,20 @@ pre.json{line-height:1.45}
 </style>
 
 <div id="side">
-  <div id="brand">atif <small id="count"></small>
+  <div id="brand"><span class="mark">Atif-View</span> <small id="count"></small>
+    <span id="themes" title="Paper · Cool · Dark"></span>
     <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
   </div>
   <input id="picker" type="file" multiple hidden
          accept=".jsonl,.json,.har,.zip,.gz,.tgz,.bz2,.xz,.tar"
          onchange="openFiles(this.files)">
   <div id="drop">Drop logs, trajectories or archives</div>
-  <input id="q" placeholder="filter sessions…">
+  <input id="q" placeholder="Filter…" oninput="drawList();if(!cur)showLibrary()">
+  <div id="tagbar"></div>
   <div id="list"></div>
 </div>
 <button id="toggle" onclick="toggleSide()" title="Show/hide sessions (\\)" aria-label="Toggle sidebar">&lsaquo;</button>
-<div id="main"><div class="empty">Select a session.</div></div>
+<div id="main"><div class="empty">Loading…</div></div>
 
 <script>
 // Minimal Markdown renderer. Escapes first, then transforms, so no raw HTML
@@ -522,7 +593,9 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const num=n=>(n??0).toLocaleString();
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
+let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,
+    collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
+    EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null;
 
 function reveal(a){
@@ -591,6 +664,24 @@ addEventListener("drop",e=>{
 addEventListener("dragend",()=>showDrop(false));
 addEventListener("mouseout",e=>{if(!e.relatedTarget&&dragDepth)showDrop(false)});
 
+const THEMES=[["paper","#f6f2ea","#b0522a"],["cool","#f1f4f6","#33689f"],["dark","#18161c","#d3894b"]];
+
+function setTheme(name){
+  document.documentElement.setAttribute("data-theme",name);
+  try{localStorage.setItem("atif-view.theme",name)}catch(e){}
+  drawThemes();
+}
+
+function drawThemes(){
+  const now=document.documentElement.getAttribute("data-theme")||"paper";
+  themes.innerHTML=THEMES.map(([name,bg,accent])=>
+    `<span class="${name===now?"on":""}" onclick="setTheme('${name}')" title="${name}"
+       style="background:linear-gradient(135deg,${bg} 55%,${accent} 55%)"></span>`).join("");
+}
+
+// Restore the chosen theme before anything paints, so there is no flash.
+try{setTheme(localStorage.getItem("atif-view.theme")||"paper")}catch(e){setTheme("paper")}
+
 function toggleSide(){
   const hidden=document.body.classList.toggle("hide-side");
   toggle.innerHTML=hidden?"&rsaquo;":"&lsaquo;";
@@ -606,31 +697,198 @@ addEventListener("keydown",e=>{
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
   INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];
-  count.textContent=INDEX.length+" sessions";drawList();
+  count.textContent=INDEX.length+" sessions";drawList();showLibrary();
 });
 q.oninput=drawList;
 
+/* Diwan's collectionTree builds a forest carrying depth, then flattens it
+   against an expanded set. Same shape here, over "a/b/c" folder strings. */
+function buildForest(folders){
+  const nodes=folders.map(path=>({path,depth:path.split("/").length-1,
+    name:path.split("/").pop()}));
+  return nodes.sort((a,b)=>a.path.localeCompare(b.path));
+}
+
+function visibleRails(){
+  const counts={};
+  let unfiled=0;
+  for(const e of INDEX){
+    if(!e.folder){unfiled++;continue}
+    // A session in Redwood/SOC2 counts toward Redwood too, as Diwan rolls up.
+    const parts=e.folder.split("/");
+    for(let i=1;i<=parts.length;i++){
+      const p=parts.slice(0,i).join("/");
+      counts[p]=(counts[p]||0)+1;
+    }
+  }
+  const rows=[{path:"__all",name:"All",depth:0,count:INDEX.length}];
+  for(const n of buildForest(FOLDERS)){
+    const parent=n.path.split("/").slice(0,-1).join("/");
+    if(parent&&!EXPANDED[parent])continue;   // hidden under a collapsed parent
+    rows.push({...n,count:counts[n.path]||0,
+      children:FOLDERS.some(f=>f.startsWith(n.path+"/"))});
+  }
+  rows.push({path:"__unfiled",name:"Unfiled",depth:0,count:unfiled});
+  return rows;
+}
+
 function drawList(){
+  const rows=visibleRails();
+  list.innerHTML=rows.map(r=>{
+    const on=collection===r.path;
+    const caret=r.children
+      ? `<span class="caret ${EXPANDED[r.path]?"open":""}"
+           onclick="event.stopPropagation();toggleFolder('${esc(r.path)}')">
+           <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="3" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg></span>`
+      : `<span class="caret"></span>`;
+    return `<div class="rail${on?" on":""}" onclick="setCollection('${esc(r.path)}')"
+        style="padding-left:${10+r.depth*13}px">
+        ${caret}<span class="rl">${esc(r.name)}</span>
+        <span class="rc">${r.count}</span></div>`;
+  }).join("");
+
+  tagbar.innerHTML=TAGS.map(t=>{
+    const on=!!ACTIVE_TAGS[t.name];
+    return `<span class="pill tag${on?" on":""}" onclick="toggleTag('${esc(t.name)}')">
+      ${esc(t.name)}<b>${t.count}</b></span>`;
+  }).join("")+(INDEX.some(e=>e.origin==="opened")
+    ? `<span class="pill origin${ONLY_OPENED?" on":""}" onclick="toggleOpened()"
+         title="Opened by you, rather than found on this machine">opened</span>` : "");
+}
+
+const setCollection=p=>{collection=p;cur=null;drawList();showLibrary()};
+const toggleFolder=p=>{EXPANDED[p]=!EXPANDED[p];
+  try{localStorage.setItem("atif-view.folders",JSON.stringify(EXPANDED))}catch(e){}
+  drawList()};
+const toggleTag=t=>{ACTIVE_TAGS[t]=!ACTIVE_TAGS[t];drawList();if(!cur)showLibrary()};
+const toggleOpened=()=>{ONLY_OPENED=!ONLY_OPENED;drawList();if(!cur)showLibrary()};
+
+function libraryRows(){
   const f=q.value.toLowerCase();
-  const rows=INDEX.map((e)=>({e})).filter(({e})=>
-    !f||((e.project||"")+" "+(e.session_id||"")+" "+e.agent+" "+e.format).toLowerCase().includes(f));
-  const groups={};
-  for(const r of rows)(groups[r.e.agent]??=[]).push(r);
-  list.innerHTML=Object.entries(groups).map(([agent,rs])=>
-    `<div class="group">${esc(agent)} · ${rs.length}</div>`+rs.map(({e})=>`
-      <div class="item${cur===e.key?" on":""}" onclick="pick('${e.key}')">
-        <div class="t">${esc(short(e.project||e.session_id||e.path))}</div>
-        <div class="m">
-          <span>${e.modified?e.modified.slice(0,10):"—"}</span>
-          <span>${(e.size_bytes/1048576).toFixed(1)} MB</span>
-          ${e.subagents?`<span class="pill br">${e.subagents} branches</span>`:""}
-          ${e.format==="atif"?`<span class="pill">imported</span>`:""}
-        </div></div>`).join("")).join("")
-    ||`<div class="empty" style="padding:30px 16px">No matches.</div>`;
+  const active=Object.keys(ACTIVE_TAGS).filter(t=>ACTIVE_TAGS[t]);
+  return INDEX.filter(e=>{
+    if(collection==="__unfiled"&&e.folder)return false;
+    if(collection!=="__all"&&collection!=="__unfiled"
+       &&!(e.folder===collection||e.folder.startsWith(collection+"/")))return false;
+    if(ONLY_OPENED&&e.origin!=="opened")return false;
+    if(active.length&&!active.every(t=>(e.tags||[]).includes(t)))return false;
+    if(f){
+      const hay=(e.title||"")+" "+(e.project||"")+" "+(e.session_id||"")+" "
+        +e.agent+" "+(e.tags||[]).join(" ");
+      if(!hay.toLowerCase().includes(f))return false;
+    }
+    return true;
+  });
+}
+
+const titleOf=e=>e.title||short(e.project||e.session_id||e.path);
+
+/* Diwan shares one grid template between the header and every row so the
+   columns line up; the same trick, with the columns this corpus has. */
+function showLibrary(){
+  cur=null;
+  const rows=libraryRows();
+  main.innerHTML=`
+    <div class="lhead">
+      <h2>${esc(collection==="__all"?"All sessions"
+        :collection==="__unfiled"?"Unfiled":collection)}</h2>
+      <span class="mono">${num(rows.length)} of ${num(INDEX.length)}</span>
+    </div>
+    <div class="tgrid thead">
+      <span></span><span>Title</span><span>Agent</span>
+      <span>Modified</span><span>Size</span><span>Tags</span><span></span>
+    </div>
+    <div id="tbody">${rows.map(libraryRow).join("")
+      ||`<div class="empty">Nothing here yet.</div>`}</div>`;
+}
+
+function libraryRow(e){
+  const editing=EDITING&&EDITING.key===e.key?EDITING.field:null;
+  const title=editing==="title"
+    ? `<input class="inline" value="${esc(e.title||titleOf(e))}" autofocus
+         onkeydown="titleKey(event,'${e.key}')" onblur="stopEdit()">`
+    : `<span class="tt" ondblclick="startEdit('${e.key}','title')">${esc(titleOf(e))}</span>`;
+  return `<div class="tgrid trow" onclick="openRow(event,'${e.key}')">
+    <span class="marks">
+      ${e.starred?`<svg class="star" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`:""}
+      ${e.origin==="opened"?`<span class="opened" title="Opened by you, not found on this machine">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/>
+          <path d="M4 18v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1"/></svg></span>`:""}
+    </span>
+    <span class="tcell">${title}</span>
+    <span class="mono">${esc(e.agent)}</span>
+    <span class="mono">${e.modified?e.modified.slice(0,10):"—"}</span>
+    <span class="mono">${(e.size_bytes/1048576).toFixed(1)} MB</span>
+    <span class="tcell tags">${(e.tags||[]).map(t=>`<span class="pill tag">${esc(t)}</span>`).join("")}
+      ${editing==="tags"?`<input class="inline tagin" placeholder="add tag"
+         onkeydown="tagKey(event,'${e.key}')" onblur="stopEdit()" autofocus>`:""}</span>
+    <span class="acts">
+      <button title="Rename" onclick="event.stopPropagation();startEdit('${e.key}','title')">✎</button>
+      <button title="File into…" onclick="event.stopPropagation();fileInto('${e.key}')">⊞</button>
+      <button title="Tags" onclick="event.stopPropagation();startEdit('${e.key}','tags')">◌</button>
+      <button title="Star" onclick="event.stopPropagation();star('${e.key}')">★</button>
+    </span></div>`;
+}
+
+function openRow(event,key){
+  if(event.target.closest("input,button,.tt"))return;
+  pick(key);
+}
+
+// ---- annotation -------------------------------------------------------------
+async function annotate(key,fields){
+  const res=await fetch("/api/library",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({key,...fields})});
+  if(!res.ok){note("Could not save that change.");return}
+  await refreshIndex();
+}
+
+async function refreshIndex(){
+  const d=await fetch("/api/index").then(r=>r.json());
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];
+  count.textContent=INDEX.length+" sessions";
+  drawList();
+  if(!cur)showLibrary();
+}
+
+const startEdit=(key,field)=>{EDITING={key,field};showLibrary()};
+const stopEdit=()=>{EDITING=null;showLibrary()};
+
+function titleKey(event,key){
+  if(event.key==="Escape")return stopEdit();
+  if(event.key!=="Enter")return;
+  const value=event.target.value.trim();
+  EDITING=null;
+  annotate(key,{title:value});
+}
+
+function tagKey(event,key){
+  if(event.key==="Escape")return stopEdit();
+  if(event.key!=="Enter")return;
+  const entry=INDEX.find(e=>e.key===key);
+  const value=event.target.value.trim().toLowerCase();
+  if(!value)return stopEdit();
+  EDITING=null;
+  annotate(key,{tags:[...(entry.tags||[]),value]});
+}
+
+function star(key){
+  const entry=INDEX.find(e=>e.key===key);
+  annotate(key,{starred:!entry.starred});
+}
+
+function fileInto(key){
+  const entry=INDEX.find(e=>e.key===key);
+  const value=prompt("File into which collection?  (blank to unfile)",entry.folder||"");
+  if(value===null)return;
+  annotate(key,{folder:value});
 }
 
 function pick(key){
-  cur=key;drawList();
+  cur=key;EDITING=null;drawList();
   main.innerHTML=`<div class="empty">Converting…</div>`;
   fetch("/api/trajectory?id="+encodeURIComponent(key)).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}

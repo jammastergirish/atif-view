@@ -69,7 +69,7 @@ def server(tmp_path):
 def test_serves_the_page(server):
     status, body = _get(server + "/")
     assert status == 200
-    assert b"<title>atif-view</title>" in body
+    assert b"<title>Atif-View</title>" in body
 
 
 def test_index_lists_the_session(server):
