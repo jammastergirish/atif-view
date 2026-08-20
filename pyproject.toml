@@ -15,11 +15,16 @@ atif-viewer = "atif_viewer.cli:main"
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
-# atif-make is not on PyPI, so resolve it from its repository. Pinning a tag
-# keeps builds reproducible; switch to `branch = "main"` to track development,
-# or drop this block entirely once atif-make is published to an index.
+# atif-make is not on PyPI, so resolve it from its repository. The two move
+# together, so track `main` rather than pinning a release.
+#
+# uv still records an exact commit in uv.lock, which is what keeps a given
+# checkout reproducible. To pick up newer atif-make commits, re-resolve:
+#
+#     uv lock --upgrade-package atif-make
+#
 [tool.uv.sources]
-atif-make = { git = "https://github.com/jammastergirish/atif-make", tag = "v0.1.0" }
+atif-make = { git = "https://github.com/jammastergirish/atif-make", branch = "main" }
 
 [build-system]
 requires = ["hatchling"]

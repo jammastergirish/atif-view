@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 [[package]]
 name = "atif-make"
 version = "0.1.0"
-source = { git = "https://github.com/jammastergirish/atif-make?tag=v0.1.0#81078ba2be6e5f7112befabb036dd14e8a7a0591" }
+source = { git = "https://github.com/jammastergirish/atif-make?branch=main#81078ba2be6e5f7112befabb036dd14e8a7a0591" }
 
 [[package]]
 name = "atif-viewer"
@@ -21,7 +21,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "atif-make", git = "https://github.com/jammastergirish/atif-make?tag=v0.1.0" }]
+requires-dist = [{ name = "atif-make", git = "https://github.com/jammastergirish/atif-make?branch=main" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
