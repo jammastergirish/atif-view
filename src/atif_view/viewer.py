@@ -61,8 +61,9 @@ kbd,code,pre{font-family:ui-monospace,"SF Mono",Menlo,monospace}
   border-radius:7px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
 #brand button:hover{background:var(--sunk);color:var(--ink);border-color:var(--accent)}
 #drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
-  display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
+  display:none;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
   border:3px dashed var(--accent);pointer-events:none}
+#drop.on{display:flex}
 .note{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:200;max-width:70ch;
   background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--tool);
   border-radius:9px;padding:10px 14px;font-size:12.5px;white-space:pre-wrap;box-shadow:0 4px 14px rgba(0,0,0,.16)}
@@ -231,7 +232,7 @@ pre.json{line-height:1.45}
   <input id="picker" type="file" multiple hidden
          accept=".jsonl,.json,.har,.zip,.gz,.tgz,.bz2,.xz,.tar"
          onchange="openFiles(this.files)">
-  <div id="drop" hidden>Drop logs, trajectories or archives</div>
+  <div id="drop">Drop logs, trajectories or archives</div>
   <input id="q" placeholder="filter sessions…">
   <div id="list"></div>
 </div>
@@ -544,7 +545,7 @@ async function openFiles(files){
         headers:{"X-Filename":encodeURIComponent(file.name)},body:file});
       const data=await res.json();
       if(!res.ok||data.error){problems.push(`${file.name}: ${data.error||res.status}`);continue}
-      if(first===null)first=data.first;
+      if(first===null)first=(data.keys||[])[0]||null;
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
@@ -561,13 +562,30 @@ function note(message){
   setTimeout(()=>el.remove(),6000);
 }
 
-// Dropping a file anywhere is the same action as choosing one.
-addEventListener("dragover",e=>{e.preventDefault();drop.hidden=false});
-addEventListener("dragleave",e=>{if(e.relatedTarget===null)drop.hidden=true});
+// Dropping a file anywhere is the same action as choosing one. dragenter and
+// dragleave fire for every element the pointer crosses, so count them instead
+// of trying to detect the boundary from a single event.
+let dragDepth=0;
+const hasFiles=e=>[...(e.dataTransfer?.types||[])].includes("Files");
+const showDrop=on=>{dragDepth=on?dragDepth:0;drop.classList.toggle("on",on)};
+
+addEventListener("dragenter",e=>{
+  if(!hasFiles(e))return;
+  e.preventDefault();dragDepth++;drop.classList.add("on");
+});
+addEventListener("dragover",e=>{if(hasFiles(e))e.preventDefault()});
+addEventListener("dragleave",e=>{
+  if(!hasFiles(e))return;
+  dragDepth=Math.max(0,dragDepth-1);
+  if(!dragDepth)showDrop(false);
+});
 addEventListener("drop",e=>{
-  e.preventDefault();drop.hidden=true;
+  e.preventDefault();showDrop(false);
   if(e.dataTransfer?.files?.length)openFiles(e.dataTransfer.files);
 });
+// A drag that ends outside the window never fires drop; do not strand the overlay.
+addEventListener("dragend",()=>showDrop(false));
+addEventListener("mouseout",e=>{if(!e.relatedTarget&&dragDepth)showDrop(false)});
 
 function toggleSide(){
   const hidden=document.body.classList.toggle("hide-side");
@@ -589,13 +607,13 @@ q.oninput=drawList;
 
 function drawList(){
   const f=q.value.toLowerCase();
-  const rows=INDEX.map((e,i)=>({e,i})).filter(({e})=>
+  const rows=INDEX.map((e)=>({e})).filter(({e})=>
     !f||((e.project||"")+" "+(e.session_id||"")+" "+e.agent+" "+e.format).toLowerCase().includes(f));
   const groups={};
   for(const r of rows)(groups[r.e.agent]??=[]).push(r);
   list.innerHTML=Object.entries(groups).map(([agent,rs])=>
-    `<div class="group">${esc(agent)} · ${rs.length}</div>`+rs.map(({e,i})=>`
-      <div class="item${cur===i?" on":""}" onclick="pick(${i})">
+    `<div class="group">${esc(agent)} · ${rs.length}</div>`+rs.map(({e})=>`
+      <div class="item${cur===e.key?" on":""}" onclick="pick('${e.key}')">
         <div class="t">${esc(short(e.project||e.session_id||e.path))}</div>
         <div class="m">
           <span>${e.modified?e.modified.slice(0,10):"—"}</span>
@@ -606,10 +624,10 @@ function drawList(){
     ||`<div class="empty" style="padding:30px 16px">No matches.</div>`;
 }
 
-function pick(i){
-  cur=i;drawList();
+function pick(key){
+  cur=key;drawList();
   main.innerHTML=`<div class="empty">Converting…</div>`;
-  fetch("/api/trajectory?i="+i).then(r=>r.json()).then(t=>{
+  fetch("/api/trajectory?id="+encodeURIComponent(key)).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}
     traj=t;onlyBranches=false;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;render();
   });
@@ -625,7 +643,7 @@ function setTab(t){
   tab=t;
   // Raw and Files come from the server; fetch once per session, then cache.
   if(t!=="trajectory"&&!(extra&&extra[t])){
-    fetch(`/api/${t}?i=${cur}`).then(r=>r.json()).then(d=>{extra={...extra,[t]:d};render()});
+    fetch(`/api/${t}?id=${encodeURIComponent(cur)}`).then(r=>r.json()).then(d=>{extra={...extra,[t]:d};render()});
   }
   render();
 }
@@ -861,7 +879,7 @@ function branch(ref,ctx,depth){
 """
 
 
-def _point_images_at_server(trajectory: Trajectory, index: int) -> None:
+def _point_images_at_server(trajectory: Trajectory, index: str) -> None:
     """Rewrite relative image paths to a URL this server can answer.
 
     On disk an image path resolves next to the trajectory file, but nothing is
@@ -881,7 +899,7 @@ def _point_images_at_server(trajectory: Trajectory, index: int) -> None:
                     ("http://", "https://", "data:")
                 ):
                     name = part.source.path.rsplit("/", 1)[-1]
-                    part.source.path = f"/api/image?i={index}&name={name}"
+                    part.source.path = f"/api/image?id={index}&name={name}"
         for sub in t.subagent_trajectories or ():
             walk(sub)
 
@@ -967,8 +985,8 @@ def _associated_files(source: Path) -> list[dict]:
 
 class _Handler(BaseHTTPRequestHandler):
     entries: list[Entry] = []
-    cache: dict[int, dict] = {}
-    media: dict[int, dict] = {}
+    cache: dict[str, dict] = {}
+    media: dict[str, dict] = {}
     lock = threading.Lock()
 
     def log_message(self, *args):  # keep the console clean
@@ -982,11 +1000,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _entry(self, url):
-        """Resolve the ?i= index to an entry, or None."""
-        try:
-            return self.entries[int(parse_qs(url.query).get("i", ["-1"])[0])]
-        except (ValueError, IndexError):
+        """Resolve ?id=<content key> to an entry, or None.
+
+        Addressing by list position broke the moment entries could be added,
+        removed or reordered — a stale link would open a different session.
+        """
+        key = (parse_qs(url.query).get("id") or [""])[0]
+        if not key:
             return None
+        return next((e for e in self.entries if e.key == key), None)
 
     def do_POST(self) -> None:
         if urlparse(self.path).path != "/api/open":
@@ -1031,11 +1053,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         with self.lock:
-            start = len(self.entries)
             self.entries.extend(found)
         self._json({
             "added": len(found),
-            "first": start,
+            "keys": [e.key for e in found],
             "names": [Path(e.path).name for e in found],
         })
 
@@ -1057,6 +1078,8 @@ class _Handler(BaseHTTPRequestHandler):
         if url.path == "/api/index":
             rows = [
                 {
+                    "key": e.key,
+                    "origin": e.origin,
                     "path": e.path,
                     "agent": e.agent,
                     "format": e.format,
@@ -1117,11 +1140,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         if url.path == "/api/image":
             query = parse_qs(url.query)
-            try:
-                index = int(query.get("i", ["-1"])[0])
-            except ValueError:
-                self.send_error(404)
-                return
+            index = (query.get("id") or [""])[0]
             name = (query.get("name") or [""])[0]
             with self.lock:
                 item = self.media.get(index, {}).get(name)
@@ -1132,12 +1151,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if url.path == "/api/trajectory":
-            try:
-                index = int(parse_qs(url.query).get("i", ["-1"])[0])
-                entry = self.entries[index]
-            except (ValueError, IndexError):
+            entry = self._entry(url)
+            if entry is None:
                 self._send(json.dumps({"error": "no such session"}).encode(), "application/json")
                 return
+            index = entry.key
 
             with self.lock:
                 cached = self.cache.get(index)

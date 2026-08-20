@@ -68,15 +68,19 @@ def test_index_lists_the_session(server):
     assert rows[0]["agent"] == "codex"
 
 
+def _first_key(server: str) -> str:
+    return json.loads(_get(server + "/api/index")[1])[0]["key"]
+
+
 def test_converts_on_demand(server):
-    _, body = _get(server + "/api/trajectory?i=0")
+    _, body = _get(server + f"/api/trajectory?id={_first_key(server)}")
     trajectory = json.loads(body)
     assert trajectory["schema_version"] == "ATIF-v1.7"
     assert [s["source"] for s in trajectory["steps"]] == ["user", "agent"]
 
 
 def test_unknown_session_is_reported_not_crashed(server):
-    _, body = _get(server + "/api/trajectory?i=999")
+    _, body = _get(server + "/api/trajectory?id=nosuchkey")
     assert json.loads(body)["error"]
 
 
@@ -174,7 +178,7 @@ def test_explicit_port_in_use_is_reported_not_traced(tmp_path):
 
 
 def test_raw_endpoint_returns_the_source(server):
-    _, body = _get(server + "/api/raw?i=0")
+    _, body = _get(server + f"/api/raw?id={_first_key(server)}")
     raw = json.loads(body)
     assert raw["path"].endswith("session.jsonl")
     assert not raw["truncated"]
@@ -192,7 +196,7 @@ def test_raw_endpoint_truncates_a_large_file(tmp_path):
 
 
 def test_files_endpoint_lists_subagents(tmp_path, server):
-    _, body = _get(server + "/api/files?i=0")
+    _, body = _get(server + f"/api/files?id={_first_key(server)}")
     files = json.loads(body)
     roles = {f["role"] for f in files}
     assert "source" in roles
@@ -218,7 +222,7 @@ def test_files_endpoint_finds_sibling_subagents(tmp_path):
 
 
 def test_bad_index_on_new_endpoints(server):
-    for path in ("/api/raw?i=999", "/api/files?i=999"):
+    for path in ("/api/raw?id=nope", "/api/files?id=nope"):
         with pytest.raises(urllib.error.HTTPError) as caught:
             _get(server + path)
         assert caught.value.code == 404
@@ -241,7 +245,7 @@ def test_open_adds_an_uploaded_log_to_the_index(server):
     after = json.loads(_get(server + "/api/index")[1])
     assert len(after) == before + 1
     # And it is immediately viewable, not merely listed.
-    _, body = _get(server + f"/api/trajectory?i={result['first']}")
+    _, body = _get(server + f"/api/trajectory?id={result['keys'][0]}")
     assert json.loads(body)["schema_version"] == "ATIF-v1.7"
 
 
@@ -263,7 +267,8 @@ def test_open_neutralises_a_traversing_filename(server, tmp_path):
         server + "/api/open", LOG.encode(), "../../../../tmp/escaped.jsonl"
     )
     assert status == 200
-    landed = Path(json.loads(_get(server + "/api/index")[1])[result["first"]]["path"])
+    rows = {r["key"]: r for r in json.loads(_get(server + "/api/index")[1])}
+    landed = Path(rows[result["keys"][0]]["path"])
     assert landed.name == "escaped.jsonl"
     assert "/tmp/escaped.jsonl" != str(landed)
 
@@ -281,3 +286,16 @@ def test_open_is_the_only_post_route(server):
     with pytest.raises(urllib.error.HTTPError) as caught:
         _post(server + "/api/anything", b"x", "x.jsonl")
     assert caught.value.code == 404
+
+
+def test_reordering_the_index_does_not_change_what_a_link_opens(server):
+    """The whole point of content keys: a link survives the list moving."""
+    rows = json.loads(_get(server + "/api/index")[1])
+    key = rows[0]["key"]
+    _, before = _get(server + f"/api/trajectory?id={key}")
+
+    from atif_view.viewer import _Handler
+
+    _Handler.entries = list(reversed(_Handler.entries)) + list(_Handler.entries)
+    _, after = _get(server + f"/api/trajectory?id={key}")
+    assert json.loads(before)["session_id"] == json.loads(after)["session_id"]
