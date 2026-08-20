@@ -1,4 +1,4 @@
-"""atif-viewer command line."""
+"""atif-view command line."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def cmd_view(args: argparse.Namespace) -> int:
     if args.input:
         path = Path(args.input).expanduser()
         if not path.exists():
-            print(f"atif-viewer: no such path: {path}", file=sys.stderr)
+            print(f"atif-view: no such path: {path}", file=sys.stderr)
             return 2
         # A directory or archive holds many sessions; a plain file holds one.
         entries = (
@@ -48,7 +48,7 @@ def cmd_view(args: argparse.Namespace) -> int:
         entries = corpus.load() or corpus.scan()
 
     if not entries:
-        print("atif-viewer: nothing to view (try `atif-make index` first)", file=sys.stderr)
+        print("atif-view: nothing to view (try `atif-make index` first)", file=sys.stderr)
         return 1
     serve(entries, port=args.port, open_browser=not args.no_open)
     return 0
@@ -56,7 +56,7 @@ def cmd_view(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="atif-viewer",
+        prog="atif-view",
         description="Browse ATIF trajectories in a local viewer.",
     )
     parser.add_argument("input", nargs="?",

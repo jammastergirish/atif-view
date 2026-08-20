@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from atif_make import corpus
 
-from atif_viewer.viewer import serve
+from atif_view.viewer import serve
 
 LOG = """{"timestamp": "2026-05-01T12:00:00Z", "type": "session_meta", "payload": {"session_id": "c", "cli_version": "1", "cwd": "/w"}}
 {"timestamp": "2026-05-01T12:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}}
@@ -58,7 +58,7 @@ def server(tmp_path):
 def test_serves_the_page(server):
     status, body = _get(server + "/")
     assert status == 200
-    assert b"<title>atif-viewer</title>" in body
+    assert b"<title>atif-view</title>" in body
 
 
 def test_index_lists_the_session(server):

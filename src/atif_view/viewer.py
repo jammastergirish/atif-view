@@ -28,7 +28,7 @@ from atif_make.corpus import Entry, scan
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>atif-viewer</title>
+<title>atif-view</title>
 <style>
 :root{
   --bg:#faf9f7; --panel:#fff; --sunk:#f3f1ed; --ink:#191817; --dim:#6f6a63; --faint:#9a948c;
@@ -478,10 +478,10 @@ function reveal(a){
 function toggleSide(){
   const hidden=document.body.classList.toggle("hide-side");
   toggle.innerHTML=hidden?"&rsaquo;":"&lsaquo;";
-  try{localStorage.setItem("atif-viewer.side",hidden?"1":"0")}catch(e){}
+  try{localStorage.setItem("atif-view.side",hidden?"1":"0")}catch(e){}
 }
 // Restore the last choice; localStorage can throw in restricted contexts.
-try{if(localStorage.getItem("atif-viewer.side")==="1")toggleSide()}catch(e){}
+try{if(localStorage.getItem("atif-view.side")==="1")toggleSide()}catch(e){}
 
 addEventListener("keydown",e=>{
   // Ignore the shortcut while typing in the filter box.
@@ -832,7 +832,7 @@ def serve(entries: list[Entry] | None = None, port: int = 7433, open_browser: bo
     # Loopback only: these logs contain source code and tool output.
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"atif-viewer: {url}  ({len(_Handler.entries)} sessions)")
+    print(f"atif-view: {url}  ({len(_Handler.entries)} sessions)")
     print("Ctrl-C to stop.")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

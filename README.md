@@ -1,4 +1,4 @@
-# atif-viewer
+# atif-view
 
 Browse [ATIF v1.7](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
 trajectories in a local web viewer.
@@ -9,14 +9,14 @@ adds only the browser interface.
 ## Install
 
 ```sh
-uv tool install atif-viewer        # pulls atif-make automatically
+uv tool install atif-view        # pulls atif-make automatically
 ```
 
 ```sh
-atif-viewer                        # everything in the atif-make index
-atif-viewer path/to/session.jsonl  # one log
-atif-viewer bundle.zip             # a bundle someone sent you
-atif-viewer --port 8080 --no-open
+atif-view                        # everything in the atif-make index
+atif-view path/to/session.jsonl  # one log
+atif-view bundle.zip             # a bundle someone sent you
+atif-view --port 8080 --no-open
 ```
 
 Build the index first with `atif-make index`, or point the viewer at a file,
@@ -25,9 +25,9 @@ directory or archive and it will scan that instead.
 ## What it shows
 
 ```sh
-atif-viewer view              # everything in the index
-atif-viewer view path/to/log  # a single file
-atif-viewer view --port 8080 --no-open
+atif-view view              # everything in the index
+atif-view view path/to/log  # a single file
+atif-view view --port 8080 --no-open
 ```
 
 **Stack**: Python's standard-library `http.server` and a single self-contained
