@@ -204,11 +204,14 @@ body.hide-side #main{padding-left:52px}
 .lens b{font-variant-numeric:tabular-nums;font-size:11px;background:var(--sunk);color:var(--dim);
   border-radius:999px;padding:0 6px;font-weight:600}
 .lens.on b{background:rgba(255,255,255,.2);color:var(--bg)}
-.details{display:flex;flex-wrap:wrap;gap:4px 22px;font-size:11.5px;color:var(--faint);
-  border-top:1px solid var(--line);padding-top:10px}
-.details>div{display:flex;gap:7px;align-items:baseline;min-width:0}
-.details span{text-transform:uppercase;letter-spacing:.08em}
-.details code{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46ch}
+.details{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);
+  gap:3px 10px;align-items:baseline;border-top:1px solid var(--line);padding-top:11px}
+.dt{font:600 9.5px var(--font-mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap;text-align:right}
+.dd{font:400 11.5px var(--font-mono);color:var(--ink);min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.dd a{color:var(--accent)}
+@media(max-width:900px){.details{grid-template-columns:auto minmax(0,1fr)}}
 .hits{font-size:12px;color:var(--dim);align-self:center;margin-left:4px}
 
 /* raw + files panels */
@@ -312,6 +315,17 @@ pre{background:var(--sunk);border-radius:7px;padding:10px;overflow:auto;font-siz
 .j-num{color:var(--j-num)}
 .j-lit{color:var(--j-lit)}
 pre.json{line-height:1.45}
+
+/* A call and its output are different things; showing them in identical boxes
+   made a long argument list read as though it were already output. */
+.io{position:relative;border-radius:7px;margin-top:8px;padding:6px 10px 8px}
+.io.in{background:var(--soft)}
+.io.out{background:var(--bg);border:1px solid var(--line)}
+.io .iol{display:block;font:600 9px var(--font-mono);letter-spacing:.11em;
+  text-transform:uppercase;margin-bottom:2px}
+.io.in .iol{color:var(--accent)}
+.io.out .iol{color:var(--muted)}
+.io pre{background:transparent;padding:0;margin-top:2px;max-height:320px}
 .img{display:inline-block;margin:8px 8px 0 0}
 .img img{max-width:min(420px,100%);max-height:300px;border:1px solid var(--line);border-radius:8px;display:block;background:var(--sunk)}
 .more{padding:20px 0;text-align:center}
@@ -1110,13 +1124,23 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
 }
 
 /* Provenance: what this trajectory is and where it came from. */
+/* Provenance reads as a table, not a ragged run: flex-wrap put each label on
+   its own line as soon as one value was long. */
 function details(t,e){
-  const rows=[["Schema",t.schema_version],["Source",e.format],["Agent",t.agent?.name],
-              ["Model",t.agent?.model_name],["Session",t.session_id],
-              ["Transcript",e.size_bytes?(e.size_bytes/1048576).toFixed(1)+" MB":null],
-              ["Path",e.path]];
+  const rows=[
+    ["Schema",esc(t.schema_version)],
+    ["Source",esc(e.format)],
+    ["Agent",esc([t.agent?.name,t.agent?.version].filter(Boolean).join(" "))],
+    ["Model",esc(t.agent?.model_name)],
+    ["Session",esc(t.session_id)],
+    ["Size",e.size_bytes?(e.size_bytes/1048576).toFixed(1)+" MB":""],
+    // The path is the one value worth acting on, so it reveals in the file
+    // manager through the same helper the prose linkifier uses.
+    ["Path",e.path?pathAnchor(e.path,esc(e.path)):""],
+  ];
   return `<div class="details">${rows.filter(([,v])=>v).map(([k,v])=>
-    `<div><span>${k}</span><code>${esc(v)}</code></div>`).join("")}</div>`;
+    `<div class="dt">${k}</div><div class="dd" title="${v.replace(/<[^>]*>/g,"")}">${v}</div>`
+  ).join("")}</div>`;
 }
 
 function panelTab(){
@@ -1239,8 +1263,10 @@ function step(s,ctx,depth,idx,prefix){
     h+=`<details class="tool"><summary><span class="tname">${esc(c.function_name)}</span>
         ${refs.length?`<span class="pill br">delegates</span>`:""}</summary>
       <div class="tbody">
-        <pre class="json">${hjson(c.arguments)}</pre>
-        ${r?.content?(typeof r.content==="string"?pre(r.content):body(r.content)):""}
+        <div class="io in"><span class="iol">call</span>
+          <pre class="json">${hjson(c.arguments)}</pre></div>
+        ${r?.content?`<div class="io out"><span class="iol">output</span>
+          ${typeof r.content==="string"?pre(r.content):body(r.content)}</div>`:""}
       </div></details>`;
     for(const ref of refs)h+=branch(ref,ctx,depth);
   }
