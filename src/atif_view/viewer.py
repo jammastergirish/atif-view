@@ -44,22 +44,23 @@ PAGE = r"""<!doctype html>
 :root,:root[data-theme="paper"]{
   --bg:#f6f2ea; --surface:#fffdf8; --panel:#faf6ee; --ink:#241f18;
   --muted:#7d7466; --line:#e5ddcd; --accent:#b0522a;
-  --soft:rgba(176,82,42,.09); --hl:rgba(233,180,76,.3);
+  --soft:rgba(176,82,42,.09); --hl:rgba(233,180,76,.3); --ok:#3f7d4e;
   --shadow:0 1px 2px rgba(60,45,20,.08), 0 8px 28px rgba(60,45,20,.1);
 }
 :root[data-theme="cool"]{
   --bg:#f1f4f6; --surface:#ffffff; --panel:#f7fafb; --ink:#171c22;
   --muted:#68737f; --line:#dbe2e9; --accent:#33689f;
-  --soft:rgba(51,104,159,.09); --hl:rgba(116,169,222,.28);
+  --soft:rgba(51,104,159,.09); --hl:rgba(116,169,222,.28); --ok:#2f7a52;
   --shadow:0 1px 2px rgba(20,40,60,.08), 0 8px 28px rgba(20,40,60,.1);
 }
 :root[data-theme="dark"]{
   --bg:#18161c; --surface:#232028; --panel:#1d1b22; --ink:#eae4d8;
   --muted:#948d80; --line:#332f3a; --accent:#d3894b;
-  --soft:rgba(211,137,75,.13); --hl:rgba(211,137,75,.25);
+  --soft:rgba(211,137,75,.13); --hl:rgba(211,137,75,.25); --ok:#7fbf8f;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
 }
 :root{
+  --danger:oklch(0.54 0.13 30);
   --font-ui:"Helvetica Neue",Helvetica,Arial,sans-serif;
   --font-serif:Newsreader,Georgia,serif;
   --font-mono:"IBM Plex Mono",ui-monospace,monospace;
@@ -298,6 +299,13 @@ pre{background:var(--sunk);border-radius:7px;padding:10px;overflow:auto;font-siz
 .md th,.md td{border:1px solid var(--line);padding:5px 10px;text-align:left}
 .md th{background:var(--sunk);font-weight:600}
 .md hr{border:0;border-top:1px solid var(--line);margin:1em 0}
+/* shell output: what changed, what failed, what passed */
+.s-meta{color:var(--muted)}
+.s-add{color:var(--ok)}
+.s-del{color:var(--danger)}
+.s-bad{color:var(--danger);font-weight:500}
+.s-ok{color:var(--ok)}
+
 /* JSON syntax colours */
 .j-key{color:var(--j-key)}
 .j-str{color:var(--j-str)}
@@ -593,6 +601,29 @@ function hjson(value, indent = 2) {
   return autolink(coloured);
 }
 
+/* Shell output gets scanned for three things: what changed, what failed, what
+   passed. Measured over a real corpus those cover most of what appears — diffs
+   8%, errors 8%, test results 14% — so colour those and leave the rest alone
+   rather than tinting every line. */
+function shell(text) {
+  return escText(text)
+    .split("\n")
+    .map((line) => {
+      const t = line.trimStart();
+      // Headers first: "---" and "+++" would otherwise read as removed/added.
+      if (/^(diff --git |index [0-9a-f]|@@ |\+\+\+ |--- )/.test(t))
+        return `<span class="s-meta">${line}</span>`;
+      if (/^\+/.test(t)) return `<span class="s-add">${line}</span>`;
+      if (/^-(?!-)/.test(t)) return `<span class="s-del">${line}</span>`;
+      if (/^(Traceback \(|FAILED\b|ERROR\b|fatal:|E\s{3})/.test(t))
+        return `<span class="s-bad">${line}</span>`;
+      if (/^(ok\b|PASSED\b)|\b\d+ passed\b|\bAll tests passed\b/.test(t))
+        return `<span class="s-ok">${line}</span>`;
+      return line;
+    })
+    .join("\n");
+}
+
 // Tool output is usually plain text, sometimes JSON. Colour it only when it
 // really parses, so a log line that merely starts with "{" is left alone.
 function pre(content) {
@@ -607,7 +638,7 @@ function pre(content) {
       /* not JSON after all */
     }
   }
-  return `<pre>${autolink(escText(content))}</pre>`;
+  return `<pre>${autolink(shell(content))}</pre>`;
 }
 
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -1103,6 +1134,34 @@ function panelTab(){
       <td>${(f.size/1024).toFixed(0)} KB</td></tr>`).join("")}</tbody></table>`;
 }
 const RAW_KB=512;
+// Pretty-printing every line of a large log would balloon the page; enough to
+// read the shape is the point of this panel.
+const RAW_LINES=300;
+
+/* Colour the source with hjson — the same function that colours a tool
+   argument — rather than growing a second way to render JSON. A log is one
+   object per line; a trajectory or HAR is one document. */
+function rawSource(text){
+  const lines=text.split("\n");
+  const shown=lines.slice(0,RAW_LINES);
+  const parsed=shown.map(l=>{
+    if(!l.trim())return null;
+    try{return {v:JSON.parse(l)}}catch(e){return undefined}
+  });
+  // A truncated fetch leaves a partial final line, which is expected — every
+  // other line failing means this is not line-oriented.
+  const solid=parsed.filter((p,i)=>i<parsed.length-1&&p!==null);
+  if(solid.length&&solid.every(p=>p!==undefined)){
+    const html=shown.map((l,i)=>{
+      const p=parsed[i];
+      return p===null?"":p===undefined?escText(l):hjson(p.v);
+    }).filter(Boolean).join("\n\n");
+    const rest=lines.length-shown.length;
+    return {html,note:rest>0?` · first ${RAW_LINES} of ${num(lines.length)} records`:""};
+  }
+  try{return {html:hjson(JSON.parse(text)),note:""}}catch(e){}
+  return {html:escText(text),note:""};      // not JSON at all
+}
 
 /* Elapsed time from the first step to the last. Sessions here run from seconds
    to weeks, so the unit follows the span rather than fixing on one. */

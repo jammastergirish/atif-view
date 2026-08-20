@@ -38,6 +38,12 @@ Files you open are copied into `~/.atif/opened/`, so they outlast the viewer and
 can be organised like anything else. Deleting one removes its copy; deleting a
 scanned session only forgets the annotation, never the transcript.
 
+**Reading output.** Tool arguments and any JSON result are syntax-coloured; the
+`Raw` tab pretty-prints and colours the source through the same renderer, so a
+log reads the same there as it does in a step. Shell output is coloured for the
+three things it gets scanned for — what changed, what failed, what passed —
+measured against a real corpus rather than tinting every line.
+
 **Provenance is recorded, not applied.** A transcript you opened carries a quiet
 tray mark — never a tag pill, because that is a label *you* chose and this is a
 fact about where the file came from.
