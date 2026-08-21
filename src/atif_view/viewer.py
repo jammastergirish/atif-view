@@ -248,12 +248,14 @@ table.files tr:hover td{background:var(--sunk)}
   color:var(--faint);text-decoration:none}
 .sid:hover{color:var(--accent)}
 /* The star sits in the gutter under the step number, out of the reading line. */
-.sstar{position:absolute;left:-52px;top:24px;width:38px;display:flex;justify-content:flex-end;
+.sstar{position:absolute;left:-52px;top:28px;width:38px;display:flex;justify-content:flex-end;
+  /* the glyph's box sits a shade left of where the digits end */
+  padding-right:1px;
   color:var(--line);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .step:hover .sstar{opacity:1}
 .sstar.on{opacity:1;color:var(--accent)}
 .sstar:hover{color:var(--accent)}
-.branch .inner .sstar{left:-40px;width:28px}
+.branch .inner .sstar{left:-40px;top:27px;width:28px}
 /* Nested subagent steps sit in a narrower gutter of their own. */
 .branch .inner .step{margin-left:34px}
 .branch .inner .sid{left:-40px;top:10px;width:28px;font-size:11px}
@@ -1029,10 +1031,14 @@ const isStarred = (step, prefix) => starredSteps().includes(stepKey(step, prefix
 
 async function toggleStep(event, key) {
   event.stopPropagation();
+  // render() repaints the whole pane, which drops the reader back to the top
+  // of a long transcript. Starring is a small act; hold their place.
+  const at = main.scrollTop;
   const now = starredSteps();
   const next = now.includes(key) ? now.filter((k) => k !== key) : [...now, key];
   await annotate(cur, { starred_steps: next });
   render();
+  main.scrollTop = at;
 }
 
 function facets(s){

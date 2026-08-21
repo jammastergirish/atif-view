@@ -256,6 +256,19 @@ test("the Favourited lens counts and filters starred steps", () => {
   assert.equal(out.shown, 2);
 });
 
+test("starring a step keeps the reader where they were", async () => {
+  // A full repaint used to drop the reader at the top of a long transcript.
+  const at = await run(
+    setup({ ...ROW, starred_steps: [] }) +
+      `
+    main.scrollTop = 4200;
+    annotate = async () => {};
+    return toggleStep({ stopPropagation() {} }, "2").then(() => main.scrollTop);
+  `,
+  );
+  assert.equal(at, 4200);
+});
+
 // ---- rendering -----------------------------------------------------------------
 test("markup in a message is escaped, not rendered", () => {
   const html = run(`return md('<script>alert(1)</script> **bold**');`);
