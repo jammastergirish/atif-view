@@ -230,7 +230,6 @@ body.hide-side #main{padding-left:52px}
   color:var(--accent);margin-bottom:3px}
 .ask{margin-bottom:16px;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
 .ask .askin,.ask .askout{width:100%}
-.aioff{font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
 .askin{width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:9px;
   background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px}
 .askin:focus{outline:2px solid var(--accent);outline-offset:-1px}
@@ -238,7 +237,6 @@ body.hide-side #main{padding-left:52px}
   border-radius:0 9px 9px 0;padding:11px 14px;font-size:13.5px;background:var(--panel)}
 .askout.bad{border-left-color:var(--danger);color:var(--danger)}
 .askref{margin-top:7px;font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
-.askref .back{cursor:pointer;color:var(--accent)}
 
 /* tabs */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 18px}
@@ -1079,11 +1077,11 @@ async function explainCall(event,callId){
   if(!box)return;
   box.hidden=false;
   box.className="aiout busy";
-  box.textContent="Reading that call…";
+  box.textContent="Reading the call…";
   try{
-    const {summary,cached}=await askClaude({what:"call",call_id:callId});
+    const {summary}=await askClaude({what:"call",call_id:callId});
     box.className="aiout";
-    box.innerHTML=`<span class="ail">${cached?"summary":"summary · new"}</span>${md(summary)}`;
+    box.innerHTML=`<span class="ail">summary</span>${md(summary)}`;
   }catch(err){
     box.className="aiout bad";
     box.textContent=err.message;
@@ -1104,8 +1102,6 @@ async function askSession(event){
   }
   render();
 }
-
-const clearAsk=()=>{ASKED=null;render()};
 
 async function annotate(key,fields){
   try{await postJSON("/api/library",{key,...fields})}
@@ -1360,9 +1356,9 @@ function aiStrip(){
   return `<div class="ask">
     <label class="aisw" title="Hide every AI control for this transcript">
       <input type="checkbox" ${on?"checked":""}
-        onchange="annotate(cur,{ai:this.checked}).then(render)"> AI
+        onchange="annotate(cur,{ai:this.checked}).then(render)"> With AI support
     </label>
-    ${on?askInner():'<span class="aioff">off for this transcript</span>'}
+    ${on?askInner():""}
   </div>`;
 }
 
@@ -1376,7 +1372,7 @@ function askInner(){
       ${a.busy?"Looking through the steps…"
         :a.error?esc(a.error)
         :`${md(a.answer)}<div class="askref">from ${a.steps.length} step${
-            a.steps.length===1?"":"s"} · <span class="back" onclick="clearAsk()">clear</span></div>`}
+            a.steps.length===1?"":"s"}</div>`}
     </div>`:""}`;
 }
 

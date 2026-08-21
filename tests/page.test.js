@@ -392,6 +392,7 @@ test("a transcript switched off hides its AI controls", () => {
 test("the switch itself stays visible when AI is off, so it can be turned back on", () => {
   const html = run(`AI={available:true};cur="k";INDEX=[{key:"k",ai:false}];return aiStrip();`);
   assert.match(html, /type="checkbox"/);
+  assert.match(html, /With AI support/);
   assert.ok(!/<input[^>]*\schecked/.test(html), "the box should be unchecked");
   assert.ok(!html.includes("askin"), "the ask box should be hidden");
 
