@@ -250,10 +250,13 @@ table.files tr:hover td{background:var(--sunk)}
 .sid{font-variant-numeric:tabular-nums;font-size:11.5px;font-weight:600;letter-spacing:0;
   line-height:1.35;color:var(--faint);text-decoration:none}
 .sid:hover{color:var(--accent)}
-.sstar{display:flex;color:var(--line);cursor:pointer;opacity:0;transition:opacity .12s ease}
-.step:hover .sstar{opacity:1}
-.sstar.on{opacity:1;color:var(--accent)}
-.sstar:hover{color:var(--accent)}
+/* Always visible: an affordance revealed on hover is one nobody finds. Quiet
+   at rest, accent once it means something. */
+.sstar{display:flex;color:var(--muted);opacity:.45;cursor:pointer;
+  transition:opacity .12s ease,color .12s ease}
+.step:hover .sstar{opacity:.75}
+.sstar:hover{opacity:1;color:var(--accent)}
+.sstar.on,.step:hover .sstar.on{opacity:1;color:var(--accent)}
 .branch .inner .gut{left:-40px;width:28px}
 .branch .inner .sid{font-size:11px}
 .bnav-i .sid{position:static;width:auto;text-align:left;font-size:11px;color:var(--dim)}
@@ -670,7 +673,7 @@ const PAGE_SIZE=250;
 let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
-let tab="trajectory",query="",lens="all",extra=null,RENAMING=false;
+let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
 
 function reveal(a){
   fetch(a.getAttribute("href")).then(r=>{
@@ -997,6 +1000,17 @@ const toggle=r=>{show[r]=!show[r];limit=PAGE_SIZE;render()};
 const toggleBranches=()=>{onlyBranches=!onlyBranches;limit=PAGE_SIZE;render()};
 const more=()=>{limit+=PAGE_SIZE*4;render()};
 const toggleRaw=()=>{raw=!raw;render()};
+
+/* Open or close every tool call and branch at once. Applied to the elements
+   already on screen rather than by repainting: a repaint would drop the reader
+   to the top, and the state is kept so a later filter change honours it. */
+function toggleExpand(){
+  OPEN_ALL=!OPEN_ALL;
+  main.querySelectorAll("details.tool,details.branch").forEach(d=>{d.open=OPEN_ALL});
+  const chip=document.getElementById("xall");
+  if(chip){chip.textContent=OPEN_ALL?"collapse all":"expand all";
+           chip.classList.toggle("on",OPEN_ALL)}
+}
 const setLens=l=>{lens=l;limit=PAGE_SIZE;render()};
 
 function renameKey(event){
@@ -1157,6 +1171,8 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
       ${lens==="all"?["user","agent","system"].map(r=>
         `<span class="chip${show[r]?" on":""}" onclick="toggle('${r}')">${r}</span>`).join(""):""}
       <span class="fsep"></span>
+      <span class="chip${OPEN_ALL?" on":""}" id="xall" onclick="toggleExpand()">${
+        OPEN_ALL?"collapse all":"expand all"}</span>
       <span class="chip${raw?" on":""}" onclick="toggleRaw()">raw text</span>
       ${q?`<span class="hits">${num(total)} of ${num(t.steps.length)} match “${esc(query)}”</span>`:""}
     </div>
@@ -1313,7 +1329,7 @@ function step(s,ctx,depth,idx,prefix){
   for(const c of s.tool_calls||[]){
     const r=(s.observation?.results||[]).find(x=>x.source_call_id===c.tool_call_id);
     const refs=r?.subagent_trajectory_ref||[];
-    h+=`<details class="tool"><summary><span class="tname">${esc(c.function_name)}</span>
+    h+=`<details class="tool"${OPEN_ALL?" open":""}><summary><span class="tname">${esc(c.function_name)}</span>
         ${refs.length?`<span class="pill br">delegates</span>`:""}</summary>
       <div class="tbody">
         <div class="io in"><span class="iol">call</span>
@@ -1336,7 +1352,7 @@ function branch(ref,ctx,depth){
   }
   const x=sub.extra||{};
   const label=x.agentType||sub.agent?.name||"subagent";
-  return `<details class="branch"><summary>
+  return `<details class="branch"${OPEN_ALL?" open":""}><summary>
       <b>${esc(label)}</b>
       <span class="desc">${esc(x.description||"")}</span>
       <span class="pill br">${sub.steps.length} steps</span>

@@ -186,6 +186,13 @@ test("a top-level star marks only the top-level step", () => {
   assert.ok(!/sstar on/.test(out.inner));
 });
 
+test("the star is rendered on every step, not only on hover", () => {
+  // A hover-only affordance is one nobody discovers.
+  const out = run(setup() + `return step(traj.steps[0], traj, 0, 0, "");`);
+  assert.match(out, /class="sstar"/);
+  assert.match(out, /Add to favourites/);
+});
+
 // ---- opening a row -----------------------------------------------------------
 test("a single click on the title opens the session", () => {
   const opened = run(
@@ -267,6 +274,40 @@ test("starring a step keeps the reader where they were", async () => {
   `,
   );
   assert.equal(at, 4200);
+});
+
+test("expand all opens every tool call and branch when painted", () => {
+  const out = run(
+    setup() +
+      `
+    OPEN_ALL = true;
+    return { tool: step(traj.steps[1], traj, 0, 1, ""),
+             branch: branch({trajectory_id:"sub-a"}, traj, 0) };
+  `,
+  );
+  assert.match(out.tool, /<details class="tool" open>/);
+  assert.match(out.branch, /<details class="branch" open>/);
+});
+
+test("collapsed is the default, so a long transcript opens readable", () => {
+  const out = run(setup() + `return step(traj.steps[1], traj, 0, 1, "");`);
+  assert.match(out, /<details class="tool">/);
+});
+
+test("toggling expand does not repaint, so the reader keeps their place", () => {
+  const out = run(
+    setup() +
+      `
+    const opened=[];
+    main.scrollTop = 900;
+    main.querySelectorAll=()=>[{set open(v){opened.push(v)}}];
+    toggleExpand();
+    return {opened, at: main.scrollTop, state: OPEN_ALL};
+  `,
+  );
+  assert.deepEqual(out.opened, [true]);
+  assert.equal(out.at, 900);
+  assert.equal(out.state, true);
 });
 
 // ---- rendering -----------------------------------------------------------------

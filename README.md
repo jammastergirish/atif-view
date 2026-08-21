@@ -108,11 +108,15 @@ step's timestamp to the last, in whatever unit fits — these range from seconds
 to `63h` across two and a half days.
 
 **Favourites.** Star individual steps inside a transcript — the star sits in
-the gutter beside the step number — and the `Favourited` lens filters to them.
+the gutter beside the step number, visible at rest rather than on hover — and the `Favourited` lens filters to them.
 Stars are keyed the same way the step anchors are, so one set inside a subagent
 (whose ids restart at 1) cannot land on the wrong step. Rename a transcript from
 its own heading by double-clicking it, or from the table; both write the same
 record.
+
+**Expand all.** Tool calls and branches open collapsed so a long transcript is
+readable; one control opens or closes every one of them. It acts on what is
+already on screen rather than repainting, so you keep your place.
 
 **Finding things.** A run of several thousand steps needs more than scrolling.
 `Search this run` matches across message text, reasoning, tool names, tool
