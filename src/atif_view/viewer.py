@@ -80,7 +80,7 @@ body{font:14px/1.55 var(--font-ui);background:var(--bg);color:var(--ink);display
 kbd,code,pre{font-family:var(--font-mono)}
 
 /* ---- sidebar ---- */
-#side{width:320px;flex:0 0 320px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
+#side{width:212px;flex:0 0 212px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
 /* Diwan's header: 0 18px, one line, bordered below, on --panel. */
 #top{display:flex;align-items:center;gap:18px;padding:0 18px;height:52px;
   border-bottom:1px solid var(--line);background:var(--panel);flex:none}
@@ -89,18 +89,19 @@ kbd,code,pre{font-family:var(--font-mono)}
   font-size:13px;color:var(--muted)}
 #crumb b{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #crumb .back{cursor:pointer;color:var(--accent)}
-#theme{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
-  background:var(--surface);border:1px solid var(--line);border-radius:8px;
-  padding:7px 10px;cursor:pointer;flex:none}
-#theme:hover{color:var(--ink)}
-#brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}\n#brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}\n#brand small{font:500 10.5px var(--font-mono);color:var(--muted)}
-#brand small{font-weight:400;color:var(--faint);font-size:11.5px}
+/* The header's controls are one control in three copies. Their box lives in a
+   single rule because keeping it in three is what let the settings button drift
+   into looking like plain text beside two pills. */
+#theme,#gear,#open{font:500 11px var(--font-mono);letter-spacing:.05em;
+  color:var(--muted);background:var(--surface);border:1px solid var(--line);
+  border-radius:8px;padding:7px 10px;cursor:pointer;flex:none}
+#theme:hover,#gear:hover{color:var(--ink)}
+#brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}
+#brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}
+#brand small{font:400 11.5px var(--font-mono);color:var(--faint)}
 #themes{margin-left:auto;display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:20px;padding:1px;background:var(--surface)}
 #themes span{width:15px;height:15px;border-radius:50%;cursor:pointer;border:2px solid transparent}
 #themes span.on{border-color:var(--accent)}
-#open{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
-  background:var(--surface);border:1px solid var(--line);border-radius:8px;
-  padding:7px 10px;cursor:pointer;flex:none}
 #open:hover{color:var(--accent);border-color:var(--accent)}
 #drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
   display:none;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
@@ -134,13 +135,12 @@ body.hide-side #side{display:none}
 body.hide-side #toggle{left:10px}
 /* Keep the heading clear of the button once the sidebar is gone. */
 body.hide-side #main{padding-left:52px}
-.hd h2{font-size:21px;letter-spacing:-.02em;overflow-wrap:anywhere}
+.hd h2{font-size:21px;letter-spacing:-.02em;overflow-wrap:anywhere;cursor:text}
 .hd .sub{color:var(--dim);font-size:12.5px;margin-top:4px;overflow-wrap:anywhere}
 .stats{display:flex;gap:26px;flex-wrap:wrap;padding:16px 0 18px;margin:16px 0 22px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .stat span{color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em}
 /* ---- collection rail (Diwan's collectionTree, flattened) ---- */
-#side{width:212px;flex:0 0 212px}
 #tagbar{padding:0 14px 10px;display:flex;gap:4px;flex-wrap:wrap}
 .rail{display:flex;align-items:center;gap:6px;padding:5px 12px 5px 10px;cursor:pointer;
   font-size:12.5px;border-left:2px solid transparent;color:var(--ink)}
@@ -162,7 +162,6 @@ body.hide-side #main{padding-left:52px}
 /* ---- library table (Diwan's LibraryRow grid) ---- */
 .lhead{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
 .lhead h2{font:600 19px var(--font-serif);letter-spacing:-.01em}
-.hd h2{cursor:text}
 .inline.hdin{font:600 19px var(--font-serif);width:min(100%,34ch);padding:1px 7px}
 .mono{font:500 10.5px var(--font-mono);color:var(--muted)}
 .tgrid{display:grid;
@@ -208,9 +207,6 @@ body.hide-side #main{padding-left:52px}
   border-radius:5px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer}
 .sheet .row button:hover{background:var(--sunk)}
 .sheet .row button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
-#gear{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
-  background:none;border:none;cursor:pointer;padding:0 4px}
-#gear:hover{color:var(--ink)}
 
 /* The per-transcript switch */
 .aisw{display:inline-flex;align-items:center;gap:6px;font:500 10px var(--font-mono);
