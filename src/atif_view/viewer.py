@@ -1239,16 +1239,18 @@ function spanOf(steps){
 
 function duration(ms){
   if(ms==null)return null;
+  // A whole number reads better without the decimal: 2h, not 2.0h.
+  const trim=n=>(n<10?n.toFixed(1).replace(/\.0$/,""):String(Math.round(n)));
   const s=ms/1000;
   if(s<90)return Math.round(s)+"s";
   const m=s/60;
   if(m<90)return Math.round(m)+"m";
   const h=m/60;
-  if(h<48)return (h<10?h.toFixed(1):Math.round(h))+"h";
+  if(h<48)return trim(h)+"h";
   const d=h/24;
-  if(d<14)return (d<10?d.toFixed(1):Math.round(d))+"d";
+  if(d<14)return trim(d)+"d";
   const w=d/7;
-  return (w<10?w.toFixed(1):Math.round(w))+"w";
+  return trim(w)+"w";
 }
 
 const stat=(v,l)=>v==null?"":`<div class="stat"><b>${num(v)}</b><span>${l}</span></div>`;

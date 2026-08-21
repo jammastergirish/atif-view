@@ -17,6 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      # The page's behaviour is JavaScript; its tests run under node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: uv python install ${{ matrix.python-version }}
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest -q

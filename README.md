@@ -185,6 +185,12 @@ uv run --with-editable ../atif-make pytest
 ```
 
 The suite starts a real server on an ephemeral port and exercises the endpoints,
-including that it binds loopback only. It is isolated from your own library,
+including that it binds loopback only.
+
+Most of the viewer's behaviour is browser JavaScript, which pytest cannot
+reach — two real breaks shipped that way, a row click that did nothing and a
+trajectory pane stuck on "Converting…". Those checks live in
+`tests/page.test.js`, load the real page script against a stub DOM, and run
+from `tests/test_page.py` as part of the same suite (skipped without node). It is isolated from your own library,
 index and opened-file store — a frozen default argument once let it write to
 them, so there is a test for that too.
