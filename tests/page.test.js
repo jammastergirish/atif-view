@@ -435,6 +435,85 @@ test("an unconfigured viewer says so rather than showing a stale key", () => {
   assert.match(out, /No key saved/);
 });
 
+test("the answer renders while it is still arriving", () => {
+  const html = run(`
+    ASKED={question:"why",answer:"partly writ",steps:[],busy:true};
+    return answerHTML();`);
+  assert.match(html, /partly writ/);
+  assert.match(html, /class="askout busy"/, "no caret while streaming");
+  assert.ok(!html.includes("askref"), "step count shown before the steps are known");
+});
+
+test("the step count appears once the steps frame lands", () => {
+  const html = run(`
+    ASKED={question:"why",answer:"done",steps:[3,9],busy:false};
+    return answerHTML();`);
+  assert.match(html, /from 2 steps/);
+  assert.ok(!/busy/.test(html), "still marked busy after finishing");
+});
+
+test("one step reads as a step, not steps", () => {
+  const html = run(`ASKED={question:"q",answer:"a",steps:[4],busy:false};return answerHTML();`);
+  assert.match(html, /from 1 step</);
+});
+
+test("an error replaces the answer rather than appending to it", () => {
+  const html = run(`
+    ASKED={question:"q",answer:"",error:"Rate limited",busy:false};
+    return answerHTML();`);
+  assert.match(html, /class="askout bad"/);
+  assert.match(html, /Rate limited/);
+});
+
+test("nothing renders before a question is asked", () => {
+  assert.strictEqual(run(`ASKED=null;return answerHTML();`), "");
+});
+
+test("a streamed response is read frame by frame", async () => {
+  const frames = [];
+  const body = [
+    '{"t":"steps","steps":[1,2]}\n{"t":"delta","text":"he',
+    'llo "}\n{"t":"delta","text":"there"}\n',
+    '{"t":"done"}',
+  ];
+  globalThis.__frames = frames;
+  await run(`
+    globalThis.fetch=async()=>({ok:true,body:{getReader(){
+      const parts=${JSON.stringify(body)}.map(s=>new TextEncoder().encode(s));
+      let i=0;
+      return {read:async()=>i<parts.length?{done:false,value:parts[i++]}:{done:true}};
+    }}});
+    cur="k";
+    return streamClaude({what:"ask"},f=>globalThis.__frames.push(f));`);
+  assert.deepStrictEqual(frames.map((f) => f.t), ["steps", "delta", "delta", "done"]);
+  assert.strictEqual(frames[1].text + frames[2].text, "hello there");
+});
+
+test("an error frame throws rather than rendering as an answer", async () => {
+  await assert.rejects(
+    run(`
+      globalThis.fetch=async()=>({ok:true,body:{getReader(){
+        const one=new TextEncoder().encode('{"t":"error","error":"model refused"}');
+        let sent=false;
+        return {read:async()=>sent?{done:true}:((sent=true),{done:false,value:one})};
+      }}});
+      cur="k";
+      return streamClaude({what:"ask"},()=>{});`),
+    /model refused/,
+  );
+});
+
+test("a refusal before the stream opens surfaces its status message", async () => {
+  await assert.rejects(
+    run(`
+      globalThis.fetch=async()=>({ok:false,status:403,
+        json:async()=>({error:"AI is switched off for this transcript."})});
+      cur="k";
+      return streamClaude({what:"ask"},()=>{});`),
+    /switched off/,
+  );
+});
+
 // ---- runner --------------------------------------------------------------------
 (async () => {
   let failed = 0;

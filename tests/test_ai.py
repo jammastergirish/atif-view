@@ -6,6 +6,8 @@ against a transcript far larger than any context window still gets a sensible
 subset of steps.
 """
 
+import pytest
+
 from atif_view import ai
 
 
@@ -101,12 +103,12 @@ def test_ask_stays_inside_its_character_budget(monkeypatch):
     """A transcript can be far larger than any context window."""
     sent = {}
 
-    def fake_say(client, system, prompt, max_tokens):
+    def fake_stream(client, system, prompt, max_tokens):
         sent["prompt"] = prompt
-        return "an answer"
+        return iter(["an ", "answer"])
 
     monkeypatch.setattr(ai, "_client", lambda: object())
-    monkeypatch.setattr(ai, "_say", fake_say)
+    monkeypatch.setattr(ai, "_stream", fake_stream)
 
     huge = [_step(i, message="auth " + "x" * 9000) for i in range(1, 400)]
     answer, used = ai.ask("auth", huge)
@@ -118,7 +120,7 @@ def test_ask_stays_inside_its_character_budget(monkeypatch):
 
 def test_ask_reports_which_steps_it_used(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
-    monkeypatch.setattr(ai, "_say", lambda *a, **k: "answer")
+    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["answer"]))
     steps = [
         _step(1, message="alpha"),
         _step(2, message="beta"),
@@ -136,8 +138,8 @@ def test_summarise_call_sends_the_call_and_its_output(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
     monkeypatch.setattr(
         ai,
-        "_say",
-        lambda client, system, prompt, max_tokens: seen.setdefault("p", prompt) or "ok",
+        "_stream",
+        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
     )
     ai.summarise_call(
         {"function_name": "Bash", "arguments": {"command": "ls -la"}}, "README.md"
@@ -150,8 +152,8 @@ def test_summarise_call_copes_with_no_output(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
     monkeypatch.setattr(
         ai,
-        "_say",
-        lambda client, system, prompt, max_tokens: seen.setdefault("p", prompt) or "ok",
+        "_stream",
+        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
     )
     ai.summarise_call({"function_name": "Bash", "arguments": {}}, None)
     assert "none recorded" in seen["p"]
@@ -162,8 +164,54 @@ def test_large_output_is_clipped_rather_than_sent_whole(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
     monkeypatch.setattr(
         ai,
-        "_say",
-        lambda client, system, prompt, max_tokens: seen.setdefault("p", prompt) or "ok",
+        "_stream",
+        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
     )
     ai.summarise_call({"function_name": "Bash", "arguments": {}}, "x" * 500_000)
     assert len(seen["p"]) < 20_000
+
+
+# ---- streaming ----------------------------------------------------------------
+
+
+def test_summarise_streams_in_pieces(monkeypatch):
+    """The point of streaming: text is available before the call finishes."""
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "ran ", "ls."]))
+    assert list(ai.summarise_call_stream({"function_name": "Bash"})) == ["It ", "ran ", "ls."]
+
+
+def test_the_collected_answer_matches_the_stream(monkeypatch):
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "ran ", "ls. "]))
+    assert ai.summarise_call({"function_name": "Bash"}) == "It ran ls."
+
+
+def test_ask_knows_its_steps_before_the_first_token(monkeypatch):
+    """The viewer says what it is reading while the answer is still arriving."""
+    started = []
+
+    def fake_stream(*a, **k):
+        started.append(True)
+        yield "answer"
+
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", fake_stream)
+
+    used, chunks = ai.ask_stream("beta", [_step(1, message="alpha"), _step(2, message="beta")])
+    assert used == [2]
+    assert not started, "the steps must be known without consuming the stream"
+    assert "".join(chunks) == "answer"
+
+
+def test_a_missing_credential_is_raised_before_streaming_starts(monkeypatch):
+    """So the server can refuse with a status code rather than mid-stream."""
+
+    def refuse():
+        raise ai.Unavailable("no credential")
+
+    monkeypatch.setattr(ai, "_client", refuse)
+    with pytest.raises(ai.Unavailable):
+        ai.summarise_call_stream({"function_name": "Bash"})
+    with pytest.raises(ai.Unavailable):
+        ai.ask_stream("q", [])

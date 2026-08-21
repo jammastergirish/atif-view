@@ -58,6 +58,11 @@ Two optional AI features, both off until you press something:
   millions of tokens, so the steps that look relevant to the question are sent,
   not the whole thing, and the answer says how many it used.
 
+Both stream: text appears as it is written rather than after the call finishes.
+The response is newline-delimited JSON read with `fetch`, not server-sent
+events — an `EventSource` reconnects when the connection closes, which would
+silently repeat a paid call.
+
 Nothing is sent on load, on hover, or in the background. Every request is one
 click, of yours.
 

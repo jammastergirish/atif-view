@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from . import config
@@ -68,11 +69,12 @@ def available() -> bool:
     return status()[0]
 
 
-def _say(client, system: str, prompt: str, max_tokens: int) -> str:
-    """One request, adaptive thinking, streamed.
+def _stream(client, system: str, prompt: str, max_tokens: int) -> Iterator[str]:
+    """One request, adaptive thinking, yielding text as it arrives.
 
-    Streaming keeps a long answer from hitting the request timeout; the SDK
-    assembles the final message either way.
+    A generator rather than a string because the viewer shows the answer being
+    written: an explanation that takes fifteen seconds to appear reads as a
+    hang, and the same text arriving a word at a time does not.
     """
     import anthropic
 
@@ -84,6 +86,7 @@ def _say(client, system: str, prompt: str, max_tokens: int) -> str:
             thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
+            yield from stream.text_stream
             message = stream.get_final_message()
     except anthropic.NotFoundError as exc:
         raise Unavailable(f"Model {MODEL} is not available to this account.") from exc
@@ -94,9 +97,14 @@ def _say(client, system: str, prompt: str, max_tokens: int) -> str:
     except anthropic.APIConnectionError as exc:
         raise Unavailable("Could not reach the API.") from exc
 
+    # Raised after the text, so a refusal is not silently shown as an answer.
     if message.stop_reason == "refusal":
         raise Unavailable("The model declined to answer that.")
-    return "".join(b.text for b in message.content if b.type == "text").strip()
+
+
+def _say(client, system: str, prompt: str, max_tokens: int) -> str:
+    """The whole answer at once, for callers that cannot use a stream."""
+    return "".join(_stream(client, system, prompt, max_tokens)).strip()
 
 
 def _clip(value: Any, limit: int = 4000) -> str:
@@ -114,18 +122,28 @@ came back — including whether it failed. Lead with the outcome. No preamble, n
 restating the command verbatim, no markdown headings."""
 
 
-def summarise_call(call: dict, output: Any = None) -> str:
-    """Explain one tool call and its result."""
-    client = _client()
+def _call_prompt(call: dict, output: Any) -> str:
     parts = [
         f"Tool: {call.get('function_name', 'unknown')}",
         f"Arguments:\n{_clip(call.get('arguments', {}))}",
     ]
-    if output:
-        parts.append(f"Output:\n{_clip(output, 6000)}")
-    else:
-        parts.append("Output: (none recorded)")
-    return _say(client, CALL_SYSTEM, "\n\n".join(parts), max_tokens=1000)
+    parts.append(f"Output:\n{_clip(output, 6000)}" if output else "Output: (none recorded)")
+    return "\n\n".join(parts)
+
+
+def summarise_call_stream(call: dict, output: Any = None) -> Iterator[str]:
+    """Explain one tool call, a piece at a time.
+
+    The client is built before returning, so a missing credential is an error
+    the caller sees immediately rather than one that surfaces mid-stream.
+    """
+    client = _client()
+    return _stream(client, CALL_SYSTEM, _call_prompt(call, output), max_tokens=1000)
+
+
+def summarise_call(call: dict, output: Any = None) -> str:
+    """Explain one tool call and its result."""
+    return "".join(summarise_call_stream(call, output)).strip()
 
 
 # ------------------------------------------------------------------- ask -----
@@ -197,9 +215,8 @@ def relevant_steps(
     return sorted(chosen, key=lambda s: s.get("step_id", 0))
 
 
-def ask(question: str, steps: list[dict]) -> tuple[str, list[int]]:
-    """Answer a question about a transcript. Returns the answer and the steps used."""
-    client = _client()
+def _ask_prompt(question: str, steps: list[dict]) -> tuple[str, list[int]]:
+    """The prompt, and the step numbers that went into it."""
     chosen = relevant_steps(question, steps)
 
     rendered: list[str] = []
@@ -214,5 +231,21 @@ def ask(question: str, steps: list[dict]) -> tuple[str, list[int]]:
         rendered.append(block)
         used.append(step.get("step_id", 0))
 
-    prompt = f"Question: {question}\n\nSteps:\n\n" + "\n\n".join(rendered)
-    return _say(client, ASK_SYSTEM, prompt, max_tokens=4000), used
+    return f"Question: {question}\n\nSteps:\n\n" + "\n\n".join(rendered), used
+
+
+def ask_stream(question: str, steps: list[dict]) -> tuple[list[int], Iterator[str]]:
+    """The steps being used, and the answer as it arrives.
+
+    The steps are known before the first token, so the viewer can say what it is
+    reading while the answer is still being written.
+    """
+    client = _client()
+    prompt, used = _ask_prompt(question, steps)
+    return used, _stream(client, ASK_SYSTEM, prompt, max_tokens=4000)
+
+
+def ask(question: str, steps: list[dict]) -> tuple[str, list[int]]:
+    """Answer a question about a transcript. Returns the answer and steps used."""
+    used, chunks = ask_stream(question, steps)
+    return "".join(chunks).strip(), used

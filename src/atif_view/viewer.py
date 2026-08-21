@@ -236,6 +236,10 @@ body.hide-side #main{padding-left:52px}
 .askout{margin-top:9px;border:1px solid var(--line);border-left:2px solid var(--accent);
   border-radius:0 9px 9px 0;padding:11px 14px;font-size:13.5px;background:var(--panel)}
 .askout.bad{border-left-color:var(--danger);color:var(--danger)}
+.askout.busy::after,.aiout.streaming::after{content:"";display:inline-block;width:6px;
+  height:13px;margin-left:2px;background:var(--accent);vertical-align:text-bottom;
+  animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
 .askref{margin-top:7px;font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
 
 /* tabs */
@@ -1069,7 +1073,34 @@ async function postJSON(url,body){
   return data;
 }
 
-const askClaude=body=>postJSON("/api/ai",{key:cur,...body});
+/* Read a streamed NDJSON response, calling back on every frame. Text arrives
+   in pieces so an answer can be watched being written rather than waited for. */
+async function streamClaude(body,onFrame){
+  const res=await fetch("/api/ai",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({key:cur,...body})});
+  if(!res.ok){
+    const data=await res.json().catch(()=>({}));
+    throw new Error(data.error||`request failed (${res.status})`);
+  }
+  const reader=res.body.getReader(),decoder=new TextDecoder();
+  let buffer="";
+  const take=line=>{
+    if(!line.trim())return;
+    const frame=JSON.parse(line);
+    if(frame.t==="error")throw new Error(frame.error);
+    onFrame(frame);
+  };
+  for(;;){
+    const {done,value}=await reader.read();
+    if(done)break;
+    buffer+=decoder.decode(value,{stream:true});
+    const lines=buffer.split("\n");
+    buffer=lines.pop();
+    lines.forEach(take);
+  }
+  take(buffer);
+}
 
 async function explainCall(event,callId){
   event.preventDefault();event.stopPropagation();
@@ -1078,10 +1109,17 @@ async function explainCall(event,callId){
   box.hidden=false;
   box.className="aiout busy";
   box.textContent="Reading the call…";
+  let text="";
   try{
-    const {summary}=await askClaude({what:"call",call_id:callId});
+    await streamClaude({what:"call",call_id:callId},frame=>{
+      if(frame.t!=="delta")return;
+      text+=frame.text;
+      box.className="aiout streaming";
+      // Rendered on every frame so partial markdown still reads as prose.
+      box.innerHTML=`<span class="ail">summary</span>${md(text)}`;
+    });
     box.className="aiout";
-    box.innerHTML=`<span class="ail">summary</span>${md(summary)}`;
+    box.innerHTML=`<span class="ail">summary</span>${md(text)}`;
   }catch(err){
     box.className="aiout bad";
     box.textContent=err.message;
@@ -1095,12 +1133,25 @@ async function askSession(event){
   ASKED={question,answer:"",steps:[],busy:true};
   render();
   try{
-    const {answer,steps}=await askClaude({what:"ask",question});
-    ASKED={question,answer,steps,busy:false};
+    await streamClaude({what:"ask",question},frame=>{
+      if(frame.t==="steps")ASKED.steps=frame.steps;
+      else if(frame.t==="delta"){ASKED.answer+=frame.text;ASKED.busy=false}
+      // Only the answer is repainted: a full render() would steal focus from
+      // the question field on every token.
+      paintAnswer();
+    });
   }catch(err){
     ASKED={question,answer:"",error:err.message,busy:false};
   }
-  render();
+  ASKED.busy=false;
+  paintAnswer();
+}
+
+/* Update the answer in place, leaving the rest of the transcript alone. */
+function paintAnswer(){
+  const el=document.querySelector(".askout");
+  if(el)el.outerHTML=answerHTML();
+  else render();
 }
 
 async function annotate(key,fields){
@@ -1364,16 +1415,20 @@ function aiStrip(){
 
 /* Ask a question about this transcript. Nothing is sent until Enter. */
 function askInner(){
-  const a=ASKED;
   return `
     <input class="askin" placeholder="Ask about this transcript…" spellcheck="false"
-      value="${a?esc(a.question):""}" onkeydown="askSession(event)">
-    ${a?`<div class="askout${a.error?" bad":""}">
-      ${a.busy?"Looking through the steps…"
-        :a.error?esc(a.error)
-        :`${md(a.answer)}<div class="askref">from ${a.steps.length} step${
-            a.steps.length===1?"":"s"}</div>`}
-    </div>`:""}`;
+      value="${ASKED?esc(ASKED.question):""}" onkeydown="askSession(event)">
+    ${answerHTML()}`;
+}
+
+function answerHTML(){
+  const a=ASKED;
+  if(!a)return "";
+  const body=a.error?esc(a.error)
+    :a.busy&&!a.answer?"Looking through the steps…"
+    :`${md(a.answer)}${a.steps.length?`<div class="askref">from ${a.steps.length} step${
+        a.steps.length===1?"":"s"}</div>`:""}`;
+  return `<div class="askout${a.error?" bad":""}${a.busy?" busy":""}">${body}</div>`;
 }
 
 /* Provenance: what this trajectory is and where it came from. */
@@ -1801,17 +1856,18 @@ class _Handler(BaseHTTPRequestHandler):
 
             try:
                 if body.get("what") == "call":
-                    self._json(self._summarise_call(body, entry, trajectory))
+                    self._stream_call(body, entry, trajectory)
                 elif body.get("what") == "ask":
                     question = (body.get("question") or "").strip()
                     if not question:
                         self._json({"error": "ask what?"}, 400)
                         return
-                    answer, used = ai.ask(question, trajectory.get("steps", []))
-                    self._json({"answer": answer, "steps": used})
+                    self._stream_ask(question, trajectory)
                 else:
                     self._json({"error": "unknown request"}, 400)
             except ai.Unavailable as exc:
+                # Raised while building the client, before a byte is written, so
+                # a status code is still available.
                 self._json({"error": str(exc)}, 503)
             return
 
@@ -1933,28 +1989,84 @@ class _Handler(BaseHTTPRequestHandler):
             self.cache[entry.key] = payload
         return payload
 
-    def _summarise_call(self, body: dict, entry, trajectory: dict) -> dict:
+    def _find_call(self, trajectory: dict, call_id: str) -> tuple[dict | None, Any]:
+        """One tool call and its output, by id."""
+        for step in trajectory.get("steps", []):
+            for candidate in step.get("tool_calls") or []:
+                if candidate.get("tool_call_id") == call_id:
+                    output = None
+                    for row in (step.get("observation") or {}).get("results") or []:
+                        if row.get("source_call_id") == call_id:
+                            output = row.get("content")
+                    return candidate, output
+        return None, None
+
+    def _frames(self, produce) -> None:
+        """Stream newline-delimited JSON frames as they are produced.
+
+        Not server-sent events: EventSource reconnects on close, which would
+        silently repeat a paid call. A plain streamed response read by fetch
+        does not.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            for frame in produce():
+                self.wfile.write(json.dumps(frame).encode() + b"\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The reader navigated away. Nothing to report to.
+            pass
+
+    def _stream_call(self, body: dict, entry, trajectory: dict) -> None:
         """Explain one tool call, reusing a summary already paid for."""
         call_id = body.get("call_id")
         stored = library.get(entry.key).get("summaries") or {}
         if call_id in stored and not body.get("again"):
-            return {"summary": stored[call_id], "cached": True}
+            self._frames(lambda: [{"t": "delta", "text": stored[call_id]}, {"t": "done"}])
+            return
 
-        call = result = None
-        for step in trajectory.get("steps", []):
-            for candidate in step.get("tool_calls") or []:
-                if candidate.get("tool_call_id") == call_id:
-                    call = candidate
-                    for row in (step.get("observation") or {}).get("results") or []:
-                        if row.get("source_call_id") == call_id:
-                            result = row.get("content")
-                    break
+        call, output = self._find_call(trajectory, call_id)
         if call is None:
-            return {"error": "no such call"}
+            self._json({"error": "no such call"}, 404)
+            return
 
-        summary = ai.summarise_call(call, result)
-        library.update(entry.key, summaries={**stored, call_id: summary})
-        return {"summary": summary, "cached": False}
+        # Built here so a credential problem is a status code, not a half-stream.
+        chunks = ai.summarise_call_stream(call, output)
+
+        def produce():
+            parts: list[str] = []
+            try:
+                for piece in chunks:
+                    parts.append(piece)
+                    yield {"t": "delta", "text": piece}
+            except ai.Unavailable as exc:
+                yield {"t": "error", "error": str(exc)}
+                return
+            summary = "".join(parts).strip()
+            if summary:
+                library.update(entry.key, summaries={**stored, call_id: summary})
+            yield {"t": "done"}
+
+        self._frames(produce)
+
+    def _stream_ask(self, question: str, trajectory: dict) -> None:
+        """Answer a question, saying which steps it is reading first."""
+        used, chunks = ai.ask_stream(question, trajectory.get("steps", []))
+
+        def produce():
+            yield {"t": "steps", "steps": used}
+            try:
+                for piece in chunks:
+                    yield {"t": "delta", "text": piece}
+            except ai.Unavailable as exc:
+                yield {"t": "error", "error": str(exc)}
+                return
+            yield {"t": "done"}
+
+        self._frames(produce)
 
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode()

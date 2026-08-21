@@ -18,6 +18,10 @@ LOG = """{"timestamp": "2026-05-01T12:00:00Z", "type": "session_meta", "payload"
 {"timestamp": "2026-05-01T12:00:02Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hi back"}]}}
 """
 
+# Built with json.dumps rather than written out: a hand-escaped argument string
+# inside a triple-quoted literal loses a level of escaping and stops being JSON.
+LOG += '{"timestamp": "2026-05-01T12:00:03Z", "type": "response_item", "payload": {"type": "function_call", "call_id": "call_a", "name": "shell", "arguments": "{\\"command\\": \\"ls\\"}"}}' + "\n" + '{"timestamp": "2026-05-01T12:00:04Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_a", "output": "README.md"}}' + "\n"
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -97,7 +101,7 @@ def test_converts_on_demand(server):
     _, body = _get(server + f"/api/trajectory?id={_first_key(server)}")
     trajectory = json.loads(body)
     assert trajectory["schema_version"] == "ATIF-v1.7"
-    assert [s["source"] for s in trajectory["steps"]] == ["user", "agent"]
+    assert [s["source"] for s in trajectory["steps"]] == ["user", "agent", "agent"]
 
 
 def test_unknown_session_is_reported_not_crashed(server):
@@ -603,3 +607,94 @@ def test_switching_ai_back_on_restores_it(server, credentialed):
     _try_post(server + "/api/library", {"key": key, "ai": False})
     _try_post(server + "/api/library", {"key": key, "ai": True})
     assert _sessions(server)[0]["ai"] is True
+
+
+# ---- streaming ------------------------------------------------------------------
+
+
+def _ai_call_id(server: str) -> str:
+    """A tool call id from the streaming fixture session."""
+    key = _first_key(server)
+    traj = json.loads(_get(server + f"/api/trajectory?id={key}")[1])
+    for step in traj["steps"]:
+        for call in step.get("tool_calls") or []:
+            return call["tool_call_id"]
+    pytest.fail("fixture has no tool call")
+
+
+def _read_frames(url: str, body: dict, stop_after: int | None = None):
+    """Read NDJSON frames as they arrive, recording when each one landed."""
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    frames, started = [], time.monotonic()
+    with urllib.request.urlopen(request, timeout=20) as response:
+        for line in response:
+            if line.strip():
+                frames.append((time.monotonic() - started, json.loads(line)))
+                if stop_after and len(frames) >= stop_after:
+                    break
+    return frames
+
+
+def test_an_answer_arrives_in_pieces_rather_than_all_at_once(server, credentialed):
+    """The point of streaming: the first token lands long before the last."""
+    from atif_view import ai
+
+    def slow(*a, **k):
+        for piece in ["one ", "two ", "three ", "four"]:
+            time.sleep(0.15)
+            yield piece
+
+    ai_stream = pytest.MonkeyPatch()
+    ai_stream.setattr(ai, "_stream", slow)
+    try:
+        frames = _read_frames(
+            server + "/api/ai",
+            {"key": _first_key(server), "what": "ask", "question": "what happened"},
+        )
+    finally:
+        ai_stream.undo()
+
+    deltas = [(at, f) for at, f in frames if f["t"] == "delta"]
+    assert len(deltas) == 4, f"expected four deltas, got {[f for _, f in frames]}"
+    assert deltas[0][0] < deltas[-1][0] - 0.2, "every frame arrived at once — not streamed"
+    assert frames[0][1]["t"] == "steps", "the steps should be known before any text"
+    assert frames[-1][1]["t"] == "done"
+    assert "".join(f["text"] for _, f in deltas) == "one two three four"
+
+
+def test_a_summary_is_streamed_then_kept(server, credentialed):
+    from atif_view import ai
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "listed ", "files."]))
+    try:
+        call_id = _ai_call_id(server)
+        frames = _read_frames(server + "/api/ai", {
+            "key": _first_key(server), "what": "call", "call_id": call_id,
+        })
+        assert [f["t"] for _, f in frames] == ["delta", "delta", "delta", "done"]
+
+        # Paid for once: the second read must not touch the model.
+        patch.setattr(ai, "_stream", _never_called)
+        again = _read_frames(server + "/api/ai", {
+            "key": _first_key(server), "what": "call", "call_id": call_id,
+        })
+    finally:
+        patch.undo()
+
+    assert "".join(f["text"] for _, f in again if f["t"] == "delta") == "It listed files."
+
+
+def _never_called(*a, **k):
+    raise AssertionError("a cached summary was regenerated")
+
+
+def test_an_unknown_call_is_refused_before_the_stream_opens(server, credentialed):
+    status, payload = _try_post(
+        server + "/api/ai",
+        {"key": _first_key(server), "what": "call", "call_id": "nope"},
+    )
+    assert status == 404 and payload["error"] == "no such call"
