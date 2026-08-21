@@ -53,7 +53,8 @@ fact about where the file came from.
 Two optional AI features, both off until you press something:
 
 - **explain this call** — on any tool call, summarises what it tried to do and
-  what came back. The summary is kept, so you pay for it once.
+  what came back. The summary is kept, so you pay for it once — and once it
+  exists the call simply shows it, with no button to press.
 - **Ask Claude** — a collapsible panel holding a conversation about the
   session. Most sessions go to the model whole; only one too large for the
   budget is sampled, and then by scoring each step against the question. Of 81
@@ -121,8 +122,8 @@ which of the two is in use, and **Remove** clears the stored one.
 
 With no key configured, every AI control is hidden and the endpoint refuses.
 
-Each transcript also has its own **AI** switch. Turn it off and that session's
-controls disappear — useful when a transcript holds something that should not
+Each transcript also has its own **With AI support** switch. Turn it off and
+that session's controls disappear — useful when a transcript holds something that should not
 leave the machine. The server enforces it too, so a switched-off transcript is
 refused even if a request is made directly.
 
@@ -280,7 +281,19 @@ trajectory pane stuck on "Converting…". Those checks live in
 `tests/page.test.js`, load the real page script against a stub DOM, and run from
 `tests/test_page.py` as part of the same suite (skipped without node).
 
-The AI tests never call the API: the model call is stubbed, and what they check
-is the part that matters when it is wrong — that nothing is sent unasked, that a
-summary is paid for once, that a stored key never reaches a response, and that a
-transcript switched off is refused by the server rather than merely hidden.
+The AI tests never call the API. Most stub the model call and check the part
+that matters when it is wrong — that nothing is sent unasked, that a summary is
+paid for once, that a stored key never reaches a response, and that a transcript
+switched off is refused by the server rather than merely hidden.
+
+`tests/test_stream.py` is the exception: it drives the one function that does
+touch the SDK, using a fake client but the SDK's real exception classes, so a
+rename or re-parenting fails here instead of on someone's first paid call. It
+found one already — the SDK moved from `httpx` to `httpx2` at 1.0. CI installs
+the extra and fails on any skipped test, since a silently skipped test is worse
+than no test.
+
+`tests/test_readme.py` checks this file against the code, pairing each claim
+with the marker that makes it true. Prose drifts quietly: a documented behaviour
+outlived the code twice here, once because an edit matched nothing and reported
+success anyway.
