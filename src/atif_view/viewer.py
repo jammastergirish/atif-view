@@ -228,13 +228,26 @@ body.hide-side #main{padding-left:52px}
 .aiout.bad{border-left-color:var(--danger);color:var(--danger);background:transparent}
 .ail{display:block;font:600 9px var(--font-mono);letter-spacing:.11em;text-transform:uppercase;
   color:var(--accent);margin-bottom:3px}
-.ask{margin-bottom:16px;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
-.ask .askin,.ask .askout{width:100%}
+.ask{margin-bottom:16px;border:1px solid var(--line);border-radius:9px;
+  background:var(--panel);overflow:hidden}
+.ask>summary{list-style:none;cursor:pointer;padding:8px 13px;display:flex;
+  align-items:center;gap:12px}
+.ask>summary::-webkit-details-marker{display:none}
+.ask>summary::before{content:"▸";color:var(--muted);font-size:10px;transition:transform .12s}
+.ask[open]>summary::before{transform:rotate(90deg)}
+.askt{font:600 11px var(--font-mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted)}
+.ask>summary:hover .askt{color:var(--ink)}
+.ask .aisw{margin-left:auto}
+.askbody{padding:0 13px 12px;display:flex;flex-direction:column;gap:9px}
+.turns{display:flex;flex-direction:column;gap:11px}
+.turns:empty{display:none}
+.askq{font-weight:600;font-size:13.5px;margin-bottom:5px}
+.askq::before{content:"›";color:var(--accent);margin-right:6px}
 .askin{width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:9px;
   background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px}
 .askin:focus{outline:2px solid var(--accent);outline-offset:-1px}
-.askout{margin-top:9px;border:1px solid var(--line);border-left:2px solid var(--accent);
-  border-radius:0 9px 9px 0;padding:11px 14px;font-size:13.5px;background:var(--panel)}
+.askout{border-left:2px solid var(--accent);padding:2px 0 2px 12px;font-size:13.5px}
 .askout.bad{border-left-color:var(--danger);color:var(--danger)}
 .askout.busy::after,.aiout.streaming::after{content:"";display:inline-block;width:6px;
   height:13px;margin-left:2px;background:var(--accent);vertical-align:text-bottom;
@@ -746,7 +759,7 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const num=n=>(n??0).toLocaleString();
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],FOLDERS=[],TAGS=[],AI={},ASKED=null,cur=null,traj=null,
+let INDEX=[],FOLDERS=[],TAGS=[],AI={},CHAT=[],ASK_OPEN=false,cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
@@ -1128,30 +1141,42 @@ async function explainCall(event,callId){
 
 async function askSession(event){
   if(event.key!=="Enter")return;
-  const question=event.target.value.trim();
-  if(!question)return;
-  ASKED={question,answer:"",steps:[],busy:true};
-  render();
+  const box=event.target,question=box.value.trim();
+  if(!question||CHAT.some(t=>t.busy))return;
+  box.value="";
+
+  // Prior turns go up as context; the steps sent with them do not, since the
+  // answers already carry what mattered.
+  const history=CHAT.filter(t=>t.a&&!t.error).map(t=>({q:t.q,a:t.a}));
+  const turn={q:question,a:"",steps:[],busy:true,thinking:false};
+  CHAT.push(turn);
+  paintTurns();
+
   try{
-    await streamClaude({what:"ask",question},frame=>{
-      if(frame.t==="steps")ASKED.steps=frame.steps;
-      else if(frame.t==="delta"){ASKED.answer+=frame.text;ASKED.busy=false}
-      // Only the answer is repainted: a full render() would steal focus from
-      // the question field on every token.
-      paintAnswer();
+    await streamClaude({what:"ask",question,history},frame=>{
+      if(frame.t==="steps")turn.steps=frame.steps;
+      else if(frame.t==="thinking")turn.thinking=true;
+      else if(frame.t==="delta"){turn.a+=frame.text;turn.thinking=false}
+      paintTurns();
     });
   }catch(err){
-    ASKED={question,answer:"",error:err.message,busy:false};
+    turn.error=err.message;
   }
-  ASKED.busy=false;
-  paintAnswer();
+  turn.busy=false;
+  paintTurns();
+  const again=document.querySelector(".askin");
+  if(again)again.focus();
 }
 
-/* Update the answer in place, leaving the rest of the transcript alone. */
-function paintAnswer(){
-  const el=document.querySelector(".askout");
-  if(el)el.outerHTML=answerHTML();
+/* Repaint only the conversation. A full render() would rebuild the question
+   field and steal focus on every token; the input deliberately sits outside
+   the repainted region. */
+function paintTurns(){
+  const el=document.querySelector(".turns");
+  if(el)el.innerHTML=turnsHTML();
   else render();
+  const last=document.querySelector(".turn:last-child");
+  if(last&&CHAT.length>1)last.scrollIntoView({block:"nearest"});
 }
 
 async function annotate(key,fields){
@@ -1404,31 +1429,40 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
    would be no way to turn it back on. Only the ask box hides. */
 function aiStrip(){
   const on=aiOn();
-  return `<div class="ask">
-    <label class="aisw" title="Hide every AI control for this transcript">
-      <input type="checkbox" ${on?"checked":""}
-        onchange="annotate(cur,{ai:this.checked}).then(render)"> With AI support
-    </label>
+  return `<details class="ask"${ASK_OPEN&&on?" open":""} ontoggle="ASK_OPEN=this.open">
+    <summary>
+      <span class="askt">Ask Claude</span>
+      <label class="aisw" onclick="event.stopPropagation()"
+             title="Hide every AI control for this transcript">
+        <input type="checkbox" ${on?"checked":""}
+          onchange="annotate(cur,{ai:this.checked}).then(render)"> With AI support
+      </label>
+    </summary>
     ${on?askInner():""}
-  </div>`;
+  </details>`;
 }
 
 /* Ask a question about this transcript. Nothing is sent until Enter. */
 function askInner(){
-  return `
-    <input class="askin" placeholder="Ask about this transcript…" spellcheck="false"
-      value="${ASKED?esc(ASKED.question):""}" onkeydown="askSession(event)">
-    ${answerHTML()}`;
+  return `<div class="askbody">
+    <div class="turns">${turnsHTML()}</div>
+    <input class="askin" spellcheck="false" onkeydown="askSession(event)"
+      placeholder="${CHAT.length?"Ask a follow-up…":"Ask about this transcript…"}">
+  </div>`;
 }
 
-function answerHTML(){
-  const a=ASKED;
-  if(!a)return "";
-  const body=a.error?esc(a.error)
-    :a.busy&&!a.answer?"Looking through the steps…"
-    :`${md(a.answer)}${a.steps.length?`<div class="askref">from ${a.steps.length} step${
-        a.steps.length===1?"":"s"}</div>`:""}`;
-  return `<div class="askout${a.error?" bad":""}${a.busy?" busy":""}">${body}</div>`;
+function turnsHTML(){
+  return CHAT.map(t=>{
+    const body=t.error?esc(t.error)
+      :t.thinking&&!t.a?"Thinking…"
+      :t.busy&&!t.a?"Reading the steps…"
+      :`${md(t.a)}${t.steps.length?`<div class="askref">from ${t.steps.length} step${
+          t.steps.length===1?"":"s"}</div>`:""}`;
+    return `<div class="turn">
+      <div class="askq">${esc(t.q)}</div>
+      <div class="askout${t.error?" bad":""}${t.busy&&!t.a?" busy":""}">${body}</div>
+    </div>`;
+  }).join("");
 }
 
 /* Provenance: what this trajectory is and where it came from. */
@@ -1739,6 +1773,11 @@ def _associated_files(source: Path) -> list[dict]:
 
 
 class _Handler(BaseHTTPRequestHandler):
+    # Streamed frames are small and frequent. With Nagle on, the kernel holds
+    # them back waiting for more to coalesce, so tokens arrive in clumps
+    # instead of as they are produced.
+    disable_nagle_algorithm = True
+
     entries: list[Entry] = []
     cache: dict[str, dict] = {}
     media: dict[str, dict] = {}
@@ -1862,7 +1901,7 @@ class _Handler(BaseHTTPRequestHandler):
                     if not question:
                         self._json({"error": "ask what?"}, 400)
                         return
-                    self._stream_ask(question, trajectory)
+                    self._stream_ask(question, trajectory, body.get("history"))
                 else:
                     self._json({"error": "unknown request"}, 400)
             except ai.Unavailable as exc:
@@ -2011,6 +2050,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.send_header("Cache-Control", "no-store")
+        # Without this the browser withholds the first bytes while it sniffs the
+        # type, which swallows the beginning of a stream.
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
             for frame in produce():
@@ -2039,7 +2081,10 @@ class _Handler(BaseHTTPRequestHandler):
         def produce():
             parts: list[str] = []
             try:
-                for piece in chunks:
+                for kind, piece in chunks:
+                    if kind != "text":
+                        yield {"t": "thinking"}
+                        continue
                     parts.append(piece)
                     yield {"t": "delta", "text": piece}
             except ai.Unavailable as exc:
@@ -2052,15 +2097,18 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._frames(produce)
 
-    def _stream_ask(self, question: str, trajectory: dict) -> None:
+    def _stream_ask(self, question: str, trajectory: dict, history: Any) -> None:
         """Answer a question, saying which steps it is reading first."""
-        used, chunks = ai.ask_stream(question, trajectory.get("steps", []))
+        turns = history if isinstance(history, list) else []
+        used, chunks = ai.ask_stream(question, trajectory.get("steps", []), turns)
 
         def produce():
             yield {"t": "steps", "steps": used}
             try:
-                for piece in chunks:
-                    yield {"t": "delta", "text": piece}
+                for kind, piece in chunks:
+                    # Thinking is signalled, not shown: the point is that
+                    # something is happening, not what it says.
+                    yield {"t": "thinking"} if kind != "text" else {"t": "delta", "text": piece}
             except ai.Unavailable as exc:
                 yield {"t": "error", "error": str(exc)}
                 return

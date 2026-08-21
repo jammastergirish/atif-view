@@ -645,7 +645,7 @@ def test_an_answer_arrives_in_pieces_rather_than_all_at_once(server, credentiale
     def slow(*a, **k):
         for piece in ["one ", "two ", "three ", "four"]:
             time.sleep(0.15)
-            yield piece
+            yield "text", piece
 
     ai_stream = pytest.MonkeyPatch()
     ai_stream.setattr(ai, "_stream", slow)
@@ -669,7 +669,11 @@ def test_a_summary_is_streamed_then_kept(server, credentialed):
     from atif_view import ai
 
     patch = pytest.MonkeyPatch()
-    patch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "listed ", "files."]))
+    patch.setattr(
+        ai,
+        "_stream",
+        lambda *a, **k: iter([("text", "It "), ("text", "listed "), ("text", "files.")]),
+    )
     try:
         call_id = _ai_call_id(server)
         frames = _read_frames(server + "/api/ai", {
@@ -698,3 +702,64 @@ def test_an_unknown_call_is_refused_before_the_stream_opens(server, credentialed
         {"key": _first_key(server), "what": "call", "call_id": "nope"},
     )
     assert status == 404 and payload["error"] == "no such call"
+
+
+def test_thinking_is_signalled_but_its_content_is_not_sent(server, credentialed):
+    """The reader learns that something is happening, not what it says."""
+    from atif_view import ai
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(
+        ai,
+        "_stream",
+        lambda *a, **k: iter([("thinking", "secret deliberation"), ("text", "the answer")]),
+    )
+    try:
+        frames = _read_frames(
+            server + "/api/ai",
+            {"key": _first_key(server), "what": "ask", "question": "why"},
+        )
+    finally:
+        patch.undo()
+
+    kinds = [f["t"] for _, f in frames]
+    assert kinds == ["steps", "thinking", "delta", "done"]
+    assert "secret deliberation" not in json.dumps([f for _, f in frames])
+
+
+def test_a_follow_up_question_carries_the_earlier_turn(server, credentialed):
+    from atif_view import ai
+
+    seen = {}
+
+    def capture(client, system, messages, max_tokens, thinking=True):
+        seen["messages"] = messages
+        return iter([("text", "second")])
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(ai, "_stream", capture)
+    try:
+        _read_frames(server + "/api/ai", {
+            "key": _first_key(server), "what": "ask", "question": "and then?",
+            "history": [{"q": "what happened", "a": "it ran ls"}],
+        })
+    finally:
+        patch.undo()
+
+    assert [m["role"] for m in seen["messages"]] == ["user", "assistant", "user"]
+    assert seen["messages"][1]["content"] == "it ran ls"
+
+
+def test_a_malformed_history_is_ignored_rather_than_crashing(server, credentialed):
+    from atif_view import ai
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(ai, "_stream", lambda *a, **k: iter([("text", "fine")]))
+    try:
+        frames = _read_frames(server + "/api/ai", {
+            "key": _first_key(server), "what": "ask", "question": "q",
+            "history": "not a list",
+        })
+    finally:
+        patch.undo()
+    assert frames[-1][1]["t"] == "done"

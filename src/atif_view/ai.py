@@ -69,24 +69,43 @@ def available() -> bool:
     return status()[0]
 
 
-def _stream(client, system: str, prompt: str, max_tokens: int) -> Iterator[str]:
-    """One request, adaptive thinking, yielding text as it arrives.
+def _stream(
+    client,
+    system: str,
+    messages: list[dict],
+    max_tokens: int,
+    thinking: bool = True,
+) -> Iterator[tuple[str, str]]:
+    """One request, yielding ("thinking" | "text", piece) as it arrives.
 
-    A generator rather than a string because the viewer shows the answer being
-    written: an explanation that takes fifteen seconds to appear reads as a
-    hang, and the same text arriving a word at a time does not.
+    Two kinds, not one, because thinking produces no text: a model that thinks
+    for twenty seconds before its first word looks identical to a hang. The
+    caller can say "thinking" while that is what is happening.
+
+    `thinking` is off for work that does not need it — a two-sentence
+    description of one tool call is delayed, not improved, by deliberation.
     """
     import anthropic
 
+    request: dict[str, Any] = {
+        "model": MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if thinking:
+        request["thinking"] = {"type": "adaptive"}
+
     try:
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            thinking={"type": "adaptive"},
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            yield from stream.text_stream
+        with client.messages.stream(**request) as stream:
+            for event in stream:
+                if event.type != "content_block_delta":
+                    continue
+                kind = getattr(event.delta, "type", "")
+                if kind == "thinking_delta":
+                    yield "thinking", event.delta.thinking
+                elif kind == "text_delta":
+                    yield "text", event.delta.text
             message = stream.get_final_message()
     except anthropic.NotFoundError as exc:
         raise Unavailable(f"Model {MODEL} is not available to this account.") from exc
@@ -102,9 +121,9 @@ def _stream(client, system: str, prompt: str, max_tokens: int) -> Iterator[str]:
         raise Unavailable("The model declined to answer that.")
 
 
-def _say(client, system: str, prompt: str, max_tokens: int) -> str:
-    """The whole answer at once, for callers that cannot use a stream."""
-    return "".join(_stream(client, system, prompt, max_tokens)).strip()
+def _text_only(pieces: Iterator[tuple[str, str]]) -> str:
+    """Collect a stream into the answer, dropping the thinking."""
+    return "".join(text for kind, text in pieces if kind == "text").strip()
 
 
 def _clip(value: Any, limit: int = 4000) -> str:
@@ -131,19 +150,26 @@ def _call_prompt(call: dict, output: Any) -> str:
     return "\n\n".join(parts)
 
 
-def summarise_call_stream(call: dict, output: Any = None) -> Iterator[str]:
+def summarise_call_stream(call: dict, output: Any = None) -> Iterator[tuple[str, str]]:
     """Explain one tool call, a piece at a time.
 
     The client is built before returning, so a missing credential is an error
     the caller sees immediately rather than one that surfaces mid-stream.
+    Thinking is off: this is a description, and the first word should be quick.
     """
     client = _client()
-    return _stream(client, CALL_SYSTEM, _call_prompt(call, output), max_tokens=1000)
+    return _stream(
+        client,
+        CALL_SYSTEM,
+        [{"role": "user", "content": _call_prompt(call, output)}],
+        max_tokens=1000,
+        thinking=False,
+    )
 
 
 def summarise_call(call: dict, output: Any = None) -> str:
     """Explain one tool call and its result."""
-    return "".join(summarise_call_stream(call, output)).strip()
+    return _text_only(summarise_call_stream(call, output))
 
 
 # ------------------------------------------------------------------- ask -----
@@ -156,7 +182,17 @@ If the steps do not contain the answer, say so plainly rather than guessing — 
 they are a relevant-looking subset, not the whole transcript, so "it is not in \
 what I was shown" is a useful answer.
 
+This is a conversation. Each turn brings a fresh selection of steps chosen for \
+that question, so steps quoted earlier may not be in front of you now; rely on \
+what you said before rather than pretending to re-read them. A follow-up like \
+"why?" refers to the previous answer.
+
 Be direct and concrete. No preamble."""
+
+# Enough for a real conversation, bounded so a long one cannot grow without
+# limit — each turn already carries a fresh page of steps.
+HISTORY_TURNS = 8
+HISTORY_CHARS = 4000
 
 
 def _text_of(step: dict) -> str:
@@ -234,7 +270,27 @@ def _ask_prompt(question: str, steps: list[dict]) -> tuple[str, list[int]]:
     return f"Question: {question}\n\nSteps:\n\n" + "\n\n".join(rendered), used
 
 
-def ask_stream(question: str, steps: list[dict]) -> tuple[list[int], Iterator[str]]:
+def _history(turns: list[dict] | None) -> list[dict]:
+    """Prior questions and answers as messages.
+
+    The steps that were sent with an earlier question are deliberately not
+    replayed: they are already digested into the answer, and re-sending a page
+    of transcript per turn would make a long conversation quadratic.
+    """
+    messages: list[dict] = []
+    for turn in (turns or [])[-HISTORY_TURNS:]:
+        question = str(turn.get("q") or "").strip()[:HISTORY_CHARS]
+        answer = str(turn.get("a") or "").strip()[:HISTORY_CHARS]
+        if not question or not answer:
+            continue
+        messages.append({"role": "user", "content": question})
+        messages.append({"role": "assistant", "content": answer})
+    return messages
+
+
+def ask_stream(
+    question: str, steps: list[dict], history: list[dict] | None = None
+) -> tuple[list[int], Iterator[tuple[str, str]]]:
     """The steps being used, and the answer as it arrives.
 
     The steps are known before the first token, so the viewer can say what it is
@@ -242,10 +298,13 @@ def ask_stream(question: str, steps: list[dict]) -> tuple[list[int], Iterator[st
     """
     client = _client()
     prompt, used = _ask_prompt(question, steps)
-    return used, _stream(client, ASK_SYSTEM, prompt, max_tokens=4000)
+    messages = [*_history(history), {"role": "user", "content": prompt}]
+    return used, _stream(client, ASK_SYSTEM, messages, max_tokens=4000)
 
 
-def ask(question: str, steps: list[dict]) -> tuple[str, list[int]]:
+def ask(
+    question: str, steps: list[dict], history: list[dict] | None = None
+) -> tuple[str, list[int]]:
     """Answer a question about a transcript. Returns the answer and steps used."""
-    used, chunks = ask_stream(question, steps)
-    return "".join(chunks).strip(), used
+    used, chunks = ask_stream(question, steps, history)
+    return _text_only(chunks), used

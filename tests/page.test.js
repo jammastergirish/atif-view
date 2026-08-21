@@ -435,38 +435,96 @@ test("an unconfigured viewer says so rather than showing a stale key", () => {
   assert.match(out, /No key saved/);
 });
 
-test("the answer renders while it is still arriving", () => {
+test("an answer renders while it is still arriving", () => {
   const html = run(`
-    ASKED={question:"why",answer:"partly writ",steps:[],busy:true};
-    return answerHTML();`);
+    CHAT=[{q:"why",a:"partly writ",steps:[],busy:true}];
+    return turnsHTML();`);
   assert.match(html, /partly writ/);
-  assert.match(html, /class="askout busy"/, "no caret while streaming");
+  assert.match(html, /class="askq">why</, "the question is not shown above its answer");
   assert.ok(!html.includes("askref"), "step count shown before the steps are known");
+});
+
+test("thinking is shown as thinking, not as an empty answer", () => {
+  const html = run(`
+    CHAT=[{q:"why",a:"",steps:[],busy:true,thinking:true}];
+    return turnsHTML();`);
+  assert.match(html, /Thinking…/);
+  assert.match(html, /class="askout busy"/, "no caret while thinking");
+});
+
+test("the first token replaces the thinking notice", () => {
+  const html = run(`
+    CHAT=[{q:"why",a:"because",steps:[],busy:true,thinking:false}];
+    return turnsHTML();`);
+  assert.ok(!/Thinking…/.test(html));
+  assert.match(html, /because/);
 });
 
 test("the step count appears once the steps frame lands", () => {
   const html = run(`
-    ASKED={question:"why",answer:"done",steps:[3,9],busy:false};
-    return answerHTML();`);
+    CHAT=[{q:"why",a:"done",steps:[3,9],busy:false}];
+    return turnsHTML();`);
   assert.match(html, /from 2 steps/);
-  assert.ok(!/busy/.test(html), "still marked busy after finishing");
 });
 
 test("one step reads as a step, not steps", () => {
-  const html = run(`ASKED={question:"q",answer:"a",steps:[4],busy:false};return answerHTML();`);
+  const html = run(`CHAT=[{q:"q",a:"a",steps:[4],busy:false}];return turnsHTML();`);
   assert.match(html, /from 1 step</);
 });
 
-test("an error replaces the answer rather than appending to it", () => {
+test("an error replaces that turn's answer rather than appending to it", () => {
   const html = run(`
-    ASKED={question:"q",answer:"",error:"Rate limited",busy:false};
-    return answerHTML();`);
+    CHAT=[{q:"q",a:"",error:"Rate limited",busy:false,steps:[]}];
+    return turnsHTML();`);
   assert.match(html, /class="askout bad"/);
   assert.match(html, /Rate limited/);
 });
 
 test("nothing renders before a question is asked", () => {
-  assert.strictEqual(run(`ASKED=null;return answerHTML();`), "");
+  assert.strictEqual(run(`CHAT=[];return turnsHTML();`), "");
+});
+
+test("a conversation keeps every turn, in order", () => {
+  const html = run(`
+    CHAT=[{q:"first",a:"one",steps:[1],busy:false},
+          {q:"second",a:"two",steps:[2],busy:false}];
+    return turnsHTML();`);
+  assert.ok(html.indexOf("first") < html.indexOf("second"), "turns out of order");
+  assert.strictEqual(html.match(/class="turn"/g).length, 2);
+});
+
+test("a question is escaped, not rendered as markup", () => {
+  const html = run(`
+    CHAT=[{q:"<img src=x onerror=alert(1)>",a:"a",steps:[],busy:false}];
+    return turnsHTML();`);
+  assert.ok(!html.includes("<img"), "a question was rendered as HTML");
+  assert.match(html, /&lt;img/);
+});
+
+test("the panel offers a follow-up prompt once a conversation exists", () => {
+  assert.match(run(`CHAT=[];return askInner();`), /Ask about this transcript/);
+  assert.match(
+    run(`CHAT=[{q:"a",a:"b",steps:[],busy:false}];return askInner();`),
+    /Ask a follow-up/,
+  );
+});
+
+test("the panel is collapsible and remembers being open", () => {
+  const shut = run(`AI={available:true};cur="k";INDEX=[{key:"k"}];ASK_OPEN=false;return aiStrip();`);
+  assert.match(shut, /<details class="ask"/);
+  assert.ok(!/<details class="ask" open/.test(shut));
+
+  const open = run(`AI={available:true};cur="k";INDEX=[{key:"k"}];ASK_OPEN=true;return aiStrip();`);
+  assert.match(open, /<details class="ask" open/);
+});
+
+test("switching AI off collapses the panel but keeps its switch reachable", () => {
+  const html = run(`
+    AI={available:true};cur="k";INDEX=[{key:"k",ai:false}];ASK_OPEN=true;
+    return aiStrip();`);
+  assert.ok(!/ open/.test(html.split("<summary>")[0]), "panel open with AI off");
+  assert.match(html, /type="checkbox"/);
+  assert.ok(!html.includes("askin"), "the question field should be gone");
 });
 
 test("a streamed response is read frame by frame", async () => {

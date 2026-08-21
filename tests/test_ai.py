@@ -30,6 +30,17 @@ def _step(step_id, source="agent", message="", tool=None, output=None, reasoning
     return step
 
 
+def _capture(seen, pieces=(("text", "ok"),)):
+    """A stub for ai._stream that records what the request would have carried."""
+
+    def stub(client, system, messages, max_tokens, thinking=True):
+        seen["messages"] = messages
+        seen["thinking"] = thinking
+        return iter(list(pieces))
+
+    return stub
+
+
 # ---- nothing runs without a credential ---------------------------------------
 
 
@@ -103,9 +114,9 @@ def test_ask_stays_inside_its_character_budget(monkeypatch):
     """A transcript can be far larger than any context window."""
     sent = {}
 
-    def fake_stream(client, system, prompt, max_tokens):
-        sent["prompt"] = prompt
-        return iter(["an ", "answer"])
+    def fake_stream(client, system, messages, max_tokens, thinking=True):
+        sent["prompt"] = messages[-1]["content"]
+        return iter([("text", "an "), ("text", "answer")])
 
     monkeypatch.setattr(ai, "_client", lambda: object())
     monkeypatch.setattr(ai, "_stream", fake_stream)
@@ -120,7 +131,7 @@ def test_ask_stays_inside_its_character_budget(monkeypatch):
 
 def test_ask_reports_which_steps_it_used(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
-    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["answer"]))
+    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter([("text", "answer")]))
     steps = [
         _step(1, message="alpha"),
         _step(2, message="beta"),
@@ -139,7 +150,9 @@ def test_summarise_call_sends_the_call_and_its_output(monkeypatch):
     monkeypatch.setattr(
         ai,
         "_stream",
-        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
+        lambda client, system, messages, max_tokens, thinking=True: iter(
+            [("text", seen.setdefault("p", messages[-1]["content"]) and "ok")]
+        ),
     )
     ai.summarise_call(
         {"function_name": "Bash", "arguments": {"command": "ls -la"}}, "README.md"
@@ -153,7 +166,9 @@ def test_summarise_call_copes_with_no_output(monkeypatch):
     monkeypatch.setattr(
         ai,
         "_stream",
-        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
+        lambda client, system, messages, max_tokens, thinking=True: iter(
+            [("text", seen.setdefault("p", messages[-1]["content"]) and "ok")]
+        ),
     )
     ai.summarise_call({"function_name": "Bash", "arguments": {}}, None)
     assert "none recorded" in seen["p"]
@@ -165,7 +180,9 @@ def test_large_output_is_clipped_rather_than_sent_whole(monkeypatch):
     monkeypatch.setattr(
         ai,
         "_stream",
-        lambda client, system, prompt, max_tokens: iter([seen.setdefault("p", prompt) and "ok"]),
+        lambda client, system, messages, max_tokens, thinking=True: iter(
+            [("text", seen.setdefault("p", messages[-1]["content"]) and "ok")]
+        ),
     )
     ai.summarise_call({"function_name": "Bash", "arguments": {}}, "x" * 500_000)
     assert len(seen["p"]) < 20_000
@@ -177,13 +194,21 @@ def test_large_output_is_clipped_rather_than_sent_whole(monkeypatch):
 def test_summarise_streams_in_pieces(monkeypatch):
     """The point of streaming: text is available before the call finishes."""
     monkeypatch.setattr(ai, "_client", lambda: object())
-    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "ran ", "ls."]))
-    assert list(ai.summarise_call_stream({"function_name": "Bash"})) == ["It ", "ran ", "ls."]
+    monkeypatch.setattr(
+        ai, "_stream", lambda *a, **k: iter([("text", "It "), ("text", "ran "), ("text", "ls.")])
+    )
+    assert [t for _, t in ai.summarise_call_stream({"function_name": "Bash"})] == [
+        "It ", "ran ", "ls.",
+    ]
 
 
 def test_the_collected_answer_matches_the_stream(monkeypatch):
     monkeypatch.setattr(ai, "_client", lambda: object())
-    monkeypatch.setattr(ai, "_stream", lambda *a, **k: iter(["It ", "ran ", "ls. "]))
+    monkeypatch.setattr(
+        ai,
+        "_stream",
+        lambda *a, **k: iter([("thinking", "hmm"), ("text", "It "), ("text", "ran ls. ")]),
+    )
     assert ai.summarise_call({"function_name": "Bash"}) == "It ran ls."
 
 
@@ -193,7 +218,7 @@ def test_ask_knows_its_steps_before_the_first_token(monkeypatch):
 
     def fake_stream(*a, **k):
         started.append(True)
-        yield "answer"
+        yield "text", "answer"
 
     monkeypatch.setattr(ai, "_client", lambda: object())
     monkeypatch.setattr(ai, "_stream", fake_stream)
@@ -201,7 +226,7 @@ def test_ask_knows_its_steps_before_the_first_token(monkeypatch):
     used, chunks = ai.ask_stream("beta", [_step(1, message="alpha"), _step(2, message="beta")])
     assert used == [2]
     assert not started, "the steps must be known without consuming the stream"
-    assert "".join(chunks) == "answer"
+    assert "".join(t for _, t in chunks) == "answer"
 
 
 def test_a_missing_credential_is_raised_before_streaming_starts(monkeypatch):
@@ -215,3 +240,62 @@ def test_a_missing_credential_is_raised_before_streaming_starts(monkeypatch):
         ai.summarise_call_stream({"function_name": "Bash"})
     with pytest.raises(ai.Unavailable):
         ai.ask_stream("q", [])
+
+
+# ---- conversation ---------------------------------------------------------------
+
+
+def test_a_follow_up_carries_the_earlier_turns(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    ai.ask("why?", [_step(1)], history=[{"q": "what broke?", "a": "the parser"}])
+    roles = [m["role"] for m in seen["messages"]]
+    assert roles == ["user", "assistant", "user"]
+    assert seen["messages"][0]["content"] == "what broke?"
+    assert seen["messages"][1]["content"] == "the parser"
+
+
+def test_earlier_step_dumps_are_not_replayed(monkeypatch):
+    """Re-sending a page of transcript per turn would make a long chat quadratic."""
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    ai.ask("and then?", [_step(1, message="x" * 5000)],
+           history=[{"q": "first", "a": "an answer"}])
+    assert "--- step" not in seen["messages"][0]["content"]
+
+
+def test_a_half_finished_turn_is_left_out_of_history(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    ai.ask("next", [_step(1)], history=[{"q": "asked", "a": ""}, {"q": "", "a": "orphan"}])
+    assert len(seen["messages"]) == 1, "an unanswered turn must not be sent"
+
+
+def test_history_is_bounded(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    long = [{"q": f"q{i}", "a": "a" * 9000} for i in range(40)]
+    ai.ask("now", [_step(1)], history=long)
+    assert len(seen["messages"]) == ai.HISTORY_TURNS * 2 + 1
+    assert all(len(m["content"]) <= ai.HISTORY_CHARS for m in seen["messages"][:-1])
+
+
+def test_a_call_summary_does_not_wait_on_thinking(monkeypatch):
+    """A two-sentence description is delayed, not improved, by deliberation."""
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    ai.summarise_call({"function_name": "Bash"})
+    assert seen["thinking"] is False
+
+
+def test_a_question_does_use_thinking(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+    ai.ask("why", [_step(1)])
+    assert seen["thinking"] is True

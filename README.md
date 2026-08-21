@@ -54,14 +54,34 @@ Two optional AI features, both off until you press something:
 
 - **explain this call** — on any tool call, summarises what it tried to do and
   what came back. The summary is kept, so you pay for it once.
-- **the ask box** — a question about the session. A transcript can run to
-  millions of tokens, so the steps that look relevant to the question are sent,
-  not the whole thing, and the answer says how many it used.
+- **Ask Claude** — a collapsible panel holding a conversation about the
+  session. A transcript can run to millions of tokens, so each question sends
+  the steps that score against *it*, and the answer says how many it used.
+  Follow-ups carry the earlier questions and answers, but not their step dumps:
+  those are already digested into the answers, and replaying a page of
+  transcript per turn would make a long conversation quadratic.
 
 Both stream: text appears as it is written rather than after the call finishes.
-The response is newline-delimited JSON read with `fetch`, not server-sent
-events — an `EventSource` reconnects when the connection closes, which would
-silently repeat a paid call.
+Three things have to be right for that, and only one is the wire format:
+
+- The response is newline-delimited JSON read with `fetch`, not server-sent
+  events. `EventSource` reconnects when the connection closes, which would
+  silently repeat a paid call. The framing itself makes no difference to how
+  finely tokens arrive — SSE would stream exactly the same.
+- `TCP_NODELAY` is set. Streamed frames are small and frequent, and with
+  Nagle's algorithm on the kernel holds them back to coalesce, so tokens land
+  in clumps.
+- `X-Content-Type-Options: nosniff`, or the browser withholds the first bytes
+  while it sniffs the type and swallows the start of the stream.
+
+Thinking is reported separately from text. A model that thinks for twenty
+seconds before its first word is indistinguishable from a hang, so the panel
+says "Thinking…" while that is what is happening — the deliberation itself is
+never sent to the page. A call summary skips thinking entirely: two sentences
+about one tool call are delayed by it, not improved.
+
+A conversation lives in the page, not the library — switching transcripts
+starts a fresh one. Call summaries are cached and do persist.
 
 Nothing is sent on load, on hover, or in the background. Every request is one
 click, of yours.
