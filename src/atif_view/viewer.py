@@ -242,23 +242,20 @@ table.files tr:hover td{background:var(--sunk)}
 .step.user:before{background:var(--user)}.step.agent:before{background:var(--agent)}.step.system:before{background:var(--system)}
 .role{display:flex;gap:10px;align-items:baseline;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
 .role b{font-weight:700}
-/* The step number sits in the gutter, left of the timeline dot. */
-.sid{position:absolute;left:-52px;top:10px;width:38px;text-align:right;
-  font-variant-numeric:tabular-nums;font-size:11.5px;font-weight:600;letter-spacing:0;
-  color:var(--faint);text-decoration:none}
+/* The gutter is one column so the number and the star cannot drift apart:
+   positioning them separately meant two sets of offsets to keep in step, and
+   a padding nudge in a flex-end box moves content the wrong way. */
+.gut{position:absolute;left:-52px;top:9px;width:38px;display:flex;flex-direction:column;
+  align-items:flex-end;gap:2px}
+.sid{font-variant-numeric:tabular-nums;font-size:11.5px;font-weight:600;letter-spacing:0;
+  line-height:1.35;color:var(--faint);text-decoration:none}
 .sid:hover{color:var(--accent)}
-/* The star sits in the gutter under the step number, out of the reading line. */
-.sstar{position:absolute;left:-52px;top:28px;width:38px;display:flex;justify-content:flex-end;
-  /* the glyph's box sits a shade left of where the digits end */
-  padding-right:1px;
-  color:var(--line);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.sstar{display:flex;color:var(--line);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .step:hover .sstar{opacity:1}
 .sstar.on{opacity:1;color:var(--accent)}
 .sstar:hover{color:var(--accent)}
-.branch .inner .sstar{left:-40px;top:27px;width:28px}
-/* Nested subagent steps sit in a narrower gutter of their own. */
-.branch .inner .step{margin-left:34px}
-.branch .inner .sid{left:-40px;top:10px;width:28px;font-size:11px}
+.branch .inner .gut{left:-40px;width:28px}
+.branch .inner .sid{font-size:11px}
 .bnav-i .sid{position:static;width:auto;text-align:left;font-size:11px;color:var(--dim)}
 .step.user .role b{color:var(--user)}.step.agent .role b{color:var(--agent)}.step.system .role b{color:var(--system)}
 .msg{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -1298,13 +1295,15 @@ function step(s,ctx,depth,idx,prefix){
   const key=(prefix||"")+s.step_id;
   const on=starredSteps().includes(key);
   let h=`<div class="step ${s.source}" id="step-${key}">
-    <div class="role"><a class="sid" href="#step-${key}" title="step ${s.step_id}">${s.step_id}</a>
-    <span class="sstar${on?" on":""}" onclick="toggleStep(event,'${key}')"
-      title="${on?"Remove from favourites":"Add to favourites"}">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="${on?"currentColor":"none"}"
-        stroke="currentColor" stroke-width="2"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87
-        1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></span>
-    <b>${esc(s.source)}</b>`;
+    <div class="gut">
+      <a class="sid" href="#step-${key}" title="step ${s.step_id}">${s.step_id}</a>
+      <span class="sstar${on?" on":""}" onclick="toggleStep(event,'${key}')"
+        title="${on?"Remove from favourites":"Add to favourites"}">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="${on?"currentColor":"none"}"
+          stroke="currentColor" stroke-width="2"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87
+          1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></span>
+    </div>
+    <div class="role"><b>${esc(s.source)}</b>`;
   if(s.timestamp)h+=`<span>${esc(s.timestamp.replace("T"," ").replace(/\.\d+Z?$/,""))}</span>`;
   if(s.model_name&&s.source==="agent")h+=`<span>${esc(s.model_name)}</span>`;
   if(s.metrics?.completion_tokens)h+=`<span>${num(s.metrics.completion_tokens)} tok</span>`;
