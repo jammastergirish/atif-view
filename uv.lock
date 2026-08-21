@@ -9,7 +9,7 @@ source = { git = "https://github.com/jammastergirish/atif-make?branch=main#c20bd
 
 [[package]]
 name = "atif-view"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "atif-make" },
