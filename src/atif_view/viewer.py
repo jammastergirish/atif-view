@@ -246,7 +246,7 @@ table.files tr:hover td{background:var(--sunk)}
    positioning them separately meant two sets of offsets to keep in step, and
    a padding nudge in a flex-end box moves content the wrong way. */
 .gut{position:absolute;left:-52px;top:9px;width:38px;display:flex;flex-direction:column;
-  align-items:flex-end;gap:2px}
+  align-items:flex-end;gap:7px}
 .sid{font-variant-numeric:tabular-nums;font-size:11.5px;font-weight:600;letter-spacing:0;
   line-height:1.35;color:var(--faint);text-decoration:none}
 .sid:hover{color:var(--accent)}
