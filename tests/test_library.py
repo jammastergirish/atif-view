@@ -110,7 +110,7 @@ def test_a_failed_write_leaves_the_previous_version_intact(store, monkeypatch):
     def boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(library.os, "replace", boom)
+    monkeypatch.setattr(library.store.os, "replace", boom)
     with pytest.raises(OSError):
         library.update("k1", store, title="Doomed")
 

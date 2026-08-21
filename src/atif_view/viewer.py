@@ -30,7 +30,7 @@ from atif_make.archive import extract, is_archive
 from atif_make.convert import convert
 from atif_make.corpus import Entry, scan
 
-from . import library
+from . import ai, config, library
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -186,6 +186,58 @@ body.hide-side #main{padding-left:52px}
 .acts button{background:none;border:none;color:var(--muted);cursor:pointer;
   font-size:12px;padding:2px 4px;border-radius:5px;line-height:1}
 .acts button:hover{color:var(--accent);background:var(--soft)}
+
+/* Settings, over the whole page */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.34);display:flex;
+  align-items:center;justify-content:center;z-index:50;padding:24px}
+#modal[hidden]{display:none}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  box-shadow:var(--shadow);padding:22px 24px;width:min(520px,100%)}
+.sheet h2{font:600 15px var(--font-ui);margin:0 0 14px}
+.sheet label{display:block;font:600 9.5px var(--font-mono);letter-spacing:.11em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.sheet input{width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
+  background:var(--surface);color:var(--ink);font:13px var(--font-mono)}
+.sheet input:focus{outline:none;border-color:var(--accent)}
+.sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0}
+.sheet .fine code{font:11px var(--font-mono);color:var(--ink)}
+.sheet .fine.bad{color:var(--danger)}
+.sheet .row{display:flex;gap:8px;margin-top:16px}
+.sheet .row button{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+  border-radius:5px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer}
+.sheet .row button:hover{background:var(--sunk)}
+.sheet .row button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+#gear{font:500 11px var(--font-mono);letter-spacing:.05em;color:var(--muted);
+  background:none;border:none;cursor:pointer;padding:0 4px}
+#gear:hover{color:var(--ink)}
+
+/* The per-transcript switch */
+.aisw{display:inline-flex;align-items:center;gap:6px;font:500 10px var(--font-mono);
+  letter-spacing:.05em;color:var(--muted);cursor:pointer;user-select:none}
+.aisw input{accent-color:var(--accent);margin:0}
+
+/* Claude-backed explanations, offered only when configured */
+.aibtn{margin-top:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);
+  border-radius:20px;padding:3px 11px;font:500 10.5px var(--font-mono);letter-spacing:.05em;
+  cursor:pointer}
+.aibtn:hover{color:var(--accent);border-color:var(--accent)}
+.aiout{margin-top:8px;border-left:2px solid var(--accent);background:var(--soft);
+  border-radius:0 7px 7px 0;padding:8px 12px;font-size:13px}
+.aiout.busy{color:var(--muted);border-left-color:var(--line);background:transparent}
+.aiout.bad{border-left-color:var(--danger);color:var(--danger);background:transparent}
+.ail{display:block;font:600 9px var(--font-mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:3px}
+.ask{margin-bottom:16px;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.ask .askin,.ask .askout{width:100%}
+.aioff{font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
+.askin{width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:9px;
+  background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px}
+.askin:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.askout{margin-top:9px;border:1px solid var(--line);border-left:2px solid var(--accent);
+  border-radius:0 9px 9px 0;padding:11px 14px;font-size:13.5px;background:var(--panel)}
+.askout.bad{border-left-color:var(--danger);color:var(--danger)}
+.askref{margin-top:7px;font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
+.askref .back{cursor:pointer;color:var(--accent)}
 
 /* tabs */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 18px}
@@ -349,8 +401,29 @@ pre.json{line-height:1.45}
   <span class="mark">ATIF-View</span>
   <div id="crumb"></div>
   <button id="theme" onclick="cycleTheme()" title="Change theme"></button>
+  <button id="gear" onclick="openSettings()" title="Settings">Settings</button>
   <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
 </header>
+
+<div id="modal" hidden onclick="if(event.target===this)closeSettings()">
+  <div class="sheet">
+    <h2>Settings</h2>
+    <label for="akey">Anthropic API key</label>
+    <input id="akey" type="password" spellcheck="false" autocomplete="off"
+           placeholder="sk-ant-…" onkeydown="if(event.key==='Enter')saveKey()">
+    <p class="fine" id="keystate"></p>
+    <p class="fine">Stored at <code>~/.atif/config.json</code>, readable only by you.
+       It is sent to the Anthropic API and nowhere else, and is never read back into
+       this page. A key in your keychain or a password manager is safer than one in a
+       file — set <code>ANTHROPIC_API_KEY</code> instead and leave this empty.</p>
+    <div class="row">
+      <button class="primary" onclick="saveKey()">Save key</button>
+      <button onclick="clearKey()">Remove</button>
+      <button onclick="closeSettings()">Close</button>
+    </div>
+    <p class="fine bad" id="keyerr" hidden></p>
+  </div>
+</div>
 <div id="shell">
 <div id="side">
   <div id="brand"><small id="count"></small></div>
@@ -670,7 +743,7 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const num=n=>(n??0).toLocaleString();
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,
+let INDEX=[],FOLDERS=[],TAGS=[],AI={},ASKED=null,cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
@@ -702,7 +775,7 @@ async function openFiles(files){
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
-  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];
+  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];AI=fresh.ai||{};
   count.textContent=INDEX.length+" sessions";drawList();
   if(first!==null)pick(first);
   if(problems.length)note(problems.join("\n"));
@@ -772,7 +845,7 @@ addEventListener("keydown",e=>{
 });
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
 });
 q.oninput=drawList;
@@ -936,16 +1009,107 @@ function titleClick(event,key){
 }
 
 // ---- annotation -------------------------------------------------------------
+/* AI controls appear only when a credential is configured AND this transcript
+   has not been switched off. The server enforces the same rule. */
+const aiOn=()=>{
+  if(!AI.available)return false;
+  const rec=INDEX.find(x=>x.key===cur);
+  return !rec||rec.ai!==false;
+};
+
+function openSettings(){
+  const err=document.getElementById("keyerr");
+  if(err){err.hidden=true;err.textContent=""}
+  const box=document.getElementById("akey");
+  if(box)box.value="";
+  showKeyState();
+  modal.hidden=false;
+  if(box)box.focus();
+}
+const closeSettings=()=>{modal.hidden=true};
+
+function showKeyState(){
+  const el=document.getElementById("keystate");
+  if(!el)return;
+  el.textContent=AI.source==="settings"
+      ?`Using the key saved here (${AI.hint}) · model ${AI.model}`
+    :AI.source==="environment"
+      ?`Using ANTHROPIC_API_KEY from the environment · model ${AI.model}`
+      :"No key configured — AI features are hidden.";
+}
+
+async function settings(body){
+  const err=document.getElementById("keyerr");
+  err.hidden=true;
+  try{
+    AI=await postJSON("/api/settings",body);
+    document.getElementById("akey").value="";
+    showKeyState();
+    render();
+  }catch(e){err.textContent=e.message;err.hidden=false}
+}
+
+const saveKey=()=>{
+  const value=document.getElementById("akey").value.trim();
+  if(value)settings({api_key:value});
+};
+const clearKey=()=>settings({clear:true});
+
+/* Nothing here runs on its own: every request below is the direct result of a
+   click, so a transcript's contents never leave the machine unasked. */
+async function postJSON(url,body){
+  const res=await fetch(url,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const data=await res.json().catch(()=>({error:"the server said nothing useful"}));
+  if(!res.ok||data.error)throw new Error(data.error||`request failed (${res.status})`);
+  return data;
+}
+
+const askClaude=body=>postJSON("/api/ai",{key:cur,...body});
+
+async function explainCall(event,callId){
+  event.preventDefault();event.stopPropagation();
+  const box=document.getElementById("ai-"+callId);
+  if(!box)return;
+  box.hidden=false;
+  box.className="aiout busy";
+  box.textContent="Reading that call…";
+  try{
+    const {summary,cached}=await askClaude({what:"call",call_id:callId});
+    box.className="aiout";
+    box.innerHTML=`<span class="ail">${cached?"summary":"summary · new"}</span>${md(summary)}`;
+  }catch(err){
+    box.className="aiout bad";
+    box.textContent=err.message;
+  }
+}
+
+async function askSession(event){
+  if(event.key!=="Enter")return;
+  const question=event.target.value.trim();
+  if(!question)return;
+  ASKED={question,answer:"",steps:[],busy:true};
+  render();
+  try{
+    const {answer,steps}=await askClaude({what:"ask",question});
+    ASKED={question,answer,steps,busy:false};
+  }catch(err){
+    ASKED={question,answer:"",error:err.message,busy:false};
+  }
+  render();
+}
+
+const clearAsk=()=>{ASKED=null;render()};
+
 async function annotate(key,fields){
-  const res=await fetch("/api/library",{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify({key,...fields})});
-  if(!res.ok){note("Could not save that change.");return}
+  try{await postJSON("/api/library",{key,...fields})}
+  catch(e){note("Could not save that change.");return}
   await refreshIndex();
 }
 
 async function refreshIndex(){
   const d=await fetch("/api/index").then(r=>r.json());
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};
   count.textContent=INDEX.length+" sessions";
   drawList();
   if(!cur)showLibrary();
@@ -1166,6 +1330,7 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
       </div>
       ${details(t,e)}
     </div>
+    ${AI.available?aiStrip():""}
     ${branches.length&&lens!=="branches"?branchNav(branches):""}
     <div class="filters">
       ${lens==="all"?["user","agent","system"].map(r=>
@@ -1180,6 +1345,33 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
       ||`<div class="empty">Nothing matches.</div>`}
     ${total>shown.length?`<div class="more"><button onclick="more()">Show more —
         ${num(shown.length)} of ${num(total)} steps</button></div>`:""}`;
+}
+
+/* The switch stays visible when AI is off for a transcript — otherwise there
+   would be no way to turn it back on. Only the ask box hides. */
+function aiStrip(){
+  const on=aiOn();
+  return `<div class="ask">
+    <label class="aisw" title="Hide every AI control for this transcript">
+      <input type="checkbox" ${on?"checked":""}
+        onchange="annotate(cur,{ai:this.checked}).then(render)"> AI
+    </label>
+    ${on?askInner():'<span class="aioff">off for this transcript</span>'}
+  </div>`;
+}
+
+/* Ask a question about this transcript. Nothing is sent until Enter. */
+function askInner(){
+  const a=ASKED;
+  return `
+    <input class="askin" placeholder="Ask about this transcript…" spellcheck="false"
+      value="${a?esc(a.question):""}" onkeydown="askSession(event)">
+    ${a?`<div class="askout${a.error?" bad":""}">
+      ${a.busy?"Looking through the steps…"
+        :a.error?esc(a.error)
+        :`${md(a.answer)}<div class="askref">from ${a.steps.length} step${
+            a.steps.length===1?"":"s"} · <span class="back" onclick="clearAsk()">clear</span></div>`}
+    </div>`:""}`;
 }
 
 /* Provenance: what this trajectory is and where it came from. */
@@ -1336,6 +1528,9 @@ function step(s,ctx,depth,idx,prefix){
           <pre class="json">${hjson(c.arguments)}</pre></div>
         ${r?.content?`<div class="io out"><span class="iol">output</span>
           ${typeof r.content==="string"?pre(r.content):body(r.content)}</div>`:""}
+        ${aiOn()?`<button class="aibtn" onclick="explainCall(event,'${c.tool_call_id}')"
+          title="Send this one call to Claude and explain it">explain this call</button>
+          <div class="aiout" id="ai-${c.tool_call_id}" hidden></div>`:""}
       </div></details>`;
     for(const ref of refs)h+=branch(ref,ctx,depth);
   }
@@ -1424,6 +1619,20 @@ UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 
 # Where opened files live. atif-make owns the location because it also has to
 # recognise one during a scan; a second constant here could drift from it.
+
+
+def _ai_state() -> dict:
+    """What the page may know about credentials: whether, and from where.
+
+    Never the key itself — only a four-character tail, enough to tell two
+    apart. A page that cannot read the key cannot leak it.
+    """
+    return {
+        "available": ai.available(),
+        "source": config.source(),
+        "hint": config.hint(),
+        "model": ai.MODEL,
+    }
 
 
 def _safe_name(raw: str) -> str:
@@ -1537,6 +1746,71 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         url = urlparse(self.path)
 
+        if url.path == "/api/settings":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            # The key is read out of the body and handed straight to storage:
+            # not logged, not echoed, not kept in memory beyond this call.
+            try:
+                if body.get("clear"):
+                    config.clear_api_key()
+                elif "api_key" in body:
+                    config.set_api_key(body.get("api_key") or "")
+                else:
+                    self._json({"error": "nothing to change"}, 400)
+                    return
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+                return
+            except OSError as exc:
+                self._json({"error": f"could not save settings: {exc.strerror}"}, 500)
+                return
+            self._json(_ai_state())
+            return
+
+        if url.path == "/api/ai":
+            if not ai.available():
+                self._json({"error": "AI features are not configured here."}, 501)
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+
+            entry = next((e for e in self.entries if e.key == body.get("key")), None)
+            if entry is None:
+                self._json({"error": "no such session"}, 404)
+                return
+            if not library.get(entry.key).get("ai", True):
+                self._json({"error": "AI is switched off for this transcript."}, 403)
+                return
+            trajectory = self._trajectory(entry)
+            if trajectory is None:
+                self._json({"error": "could not read that session"}, 500)
+                return
+
+            try:
+                if body.get("what") == "call":
+                    self._json(self._summarise_call(body, entry, trajectory))
+                elif body.get("what") == "ask":
+                    question = (body.get("question") or "").strip()
+                    if not question:
+                        self._json({"error": "ask what?"}, 400)
+                        return
+                    answer, used = ai.ask(question, trajectory.get("steps", []))
+                    self._json({"answer": answer, "steps": used})
+                else:
+                    self._json({"error": "unknown request"}, 400)
+            except ai.Unavailable as exc:
+                self._json({"error": str(exc)}, 503)
+            return
+
         if url.path == "/api/library":
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -1640,6 +1914,44 @@ class _Handler(BaseHTTPRequestHandler):
             "names": [Path(e.path).name for e in found],
         })
 
+    def _trajectory(self, entry) -> dict | None:
+        """The converted trajectory for an entry, from cache when it is there."""
+        with self.lock:
+            cached = self.cache.get(entry.key)
+        if cached is not None:
+            return cached
+        try:
+            trajectory, _ = convert(Path(entry.path), entry.format)
+        except Exception:
+            return None
+        payload = trajectory.to_dict()
+        with self.lock:
+            self.cache[entry.key] = payload
+        return payload
+
+    def _summarise_call(self, body: dict, entry, trajectory: dict) -> dict:
+        """Explain one tool call, reusing a summary already paid for."""
+        call_id = body.get("call_id")
+        stored = library.get(entry.key).get("summaries") or {}
+        if call_id in stored and not body.get("again"):
+            return {"summary": stored[call_id], "cached": True}
+
+        call = result = None
+        for step in trajectory.get("steps", []):
+            for candidate in step.get("tool_calls") or []:
+                if candidate.get("tool_call_id") == call_id:
+                    call = candidate
+                    for row in (step.get("observation") or {}).get("results") or []:
+                        if row.get("source_call_id") == call_id:
+                            result = row.get("content")
+                    break
+        if call is None:
+            return {"error": "no such call"}
+
+        summary = ai.summarise_call(call, result)
+        library.update(entry.key, summaries={**stored, call_id: summary})
+        return {"summary": summary, "cached": False}
+
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -1672,6 +1984,7 @@ class _Handler(BaseHTTPRequestHandler):
                 for e in self.entries
             ]
             payload = {
+                "ai": _ai_state(),
                 "sessions": library.decorate(rows),
                 "folders": library.folders(),
                 "tags": [{"name": t, "count": n} for t, n in library.tags()],

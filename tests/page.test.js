@@ -372,6 +372,55 @@ test("raw text that is not JSON is left as text", () => {
   assert.ok(!/class="j-/.test(out.html));
 });
 
+test("AI controls stay hidden until a credential is configured", () => {
+  assert.strictEqual(run(`AI={};cur="k";INDEX=[{key:"k"}];return aiOn();`), false);
+  assert.strictEqual(
+    run(`AI={available:true};cur="k";INDEX=[{key:"k"}];return aiOn();`),
+    true,
+  );
+});
+
+test("a transcript switched off hides its AI controls", () => {
+  const off = `AI={available:true};cur="k";INDEX=[{key:"k",ai:false}];`;
+  assert.strictEqual(run(off + "return aiOn();"), false);
+  assert.strictEqual(
+    run(`AI={available:true};cur="k";INDEX=[{key:"k",ai:true}];return aiOn();`),
+    true,
+  );
+});
+
+test("the switch itself stays visible when AI is off, so it can be turned back on", () => {
+  const html = run(`AI={available:true};cur="k";INDEX=[{key:"k",ai:false}];return aiStrip();`);
+  assert.match(html, /type="checkbox"/);
+  assert.ok(!/<input[^>]*\schecked/.test(html), "the box should be unchecked");
+  assert.ok(!html.includes("askin"), "the ask box should be hidden");
+
+  const on = run(`AI={available:true};cur="k";INDEX=[{key:"k",ai:true}];return aiStrip();`);
+  assert.ok(/<input[^>]*\schecked/.test(on), "the box should be checked when on");
+  assert.ok(on.includes("askin"), "the ask box should be shown when on");
+});
+
+test("the settings sheet never renders a key, only where one came from", () => {
+  const out = run(`
+    AI={available:true,source:"settings",hint:"\u20261234",model:"claude-opus-5"};
+    const el={textContent:""};
+    document.getElementById=()=>el;
+    showKeyState();
+    return el.textContent;`);
+  assert.match(out, /\u20261234/);
+  assert.ok(!/sk-ant/.test(out));
+});
+
+test("an unconfigured viewer says so rather than showing a stale key", () => {
+  const out = run(`
+    AI={};
+    const el={textContent:""};
+    document.getElementById=()=>el;
+    showKeyState();
+    return el.textContent;`);
+  assert.match(out, /No key configured/);
+});
+
 // ---- runner --------------------------------------------------------------------
 (async () => {
   let failed = 0;

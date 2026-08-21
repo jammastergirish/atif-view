@@ -48,6 +48,38 @@ measured against a real corpus rather than tinting every line.
 tray mark — never a tag pill, because that is a label *you* chose and this is a
 fact about where the file came from.
 
+## Asking Claude about a transcript
+
+Two optional AI features, both off until you press something:
+
+- **explain this call** — on any tool call, summarises what it tried to do and
+  what came back. The summary is kept, so you pay for it once.
+- **the ask box** — a question about the session. A transcript can run to
+  millions of tokens, so the steps that look relevant to the question are sent,
+  not the whole thing, and the answer says how many it used.
+
+Nothing is sent on load, on hover, or in the background. Every request is one
+click, of yours.
+
+```sh
+uv tool install "atif-view[ai]"    # brings in the anthropic SDK
+```
+
+Then either export `ANTHROPIC_API_KEY`, or paste a key into **Settings** in the
+top bar. A key set in Settings is stored at `~/.atif/config.json`, mode `0600`
+inside a `0700` directory; it is sent to the Anthropic API and nowhere else, and
+is never read back into the page — the page only ever sees its last four
+characters. A key in your keychain or password manager is safer than one in a
+file, so prefer the environment variable if you have the choice. Settings shows
+which of the two is in use, and **Remove** clears the stored one.
+
+With no key configured, every AI control is hidden and the endpoint refuses.
+
+Each transcript also has its own **AI** switch. Turn it off and that session's
+controls disappear — useful when a transcript holds something that should not
+leave the machine. The server enforces it too, so a switched-off transcript is
+refused even if a request is made directly.
+
 ## Themes
 
 Three, from Diwan: `paper`, `cool` (both light) and `dark`. The control in the
@@ -189,12 +221,17 @@ uv run --with-editable ../atif-make pytest
 ```
 
 The suite starts a real server on an ephemeral port and exercises the endpoints,
-including that it binds loopback only.
+including that it binds loopback only. It is isolated from your own library,
+index, settings and opened-file store — a frozen default argument once let it
+write to them, so there is a test for that too.
 
 Most of the viewer's behaviour is browser JavaScript, which pytest cannot
 reach — two real breaks shipped that way, a row click that did nothing and a
 trajectory pane stuck on "Converting…". Those checks live in
-`tests/page.test.js`, load the real page script against a stub DOM, and run
-from `tests/test_page.py` as part of the same suite (skipped without node). It is isolated from your own library,
-index and opened-file store — a frozen default argument once let it write to
-them, so there is a test for that too.
+`tests/page.test.js`, load the real page script against a stub DOM, and run from
+`tests/test_page.py` as part of the same suite (skipped without node).
+
+The AI tests never call the API: the model call is stubbed, and what they check
+is the part that matters when it is wrong — that nothing is sent unasked, that a
+summary is paid for once, that a stored key never reaches a response, and that a
+transcript switched off is refused by the server rather than merely hidden.

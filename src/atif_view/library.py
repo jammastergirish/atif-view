@@ -8,15 +8,14 @@ new — records are keyed by content, so a file that moves keeps everything.
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-LIBRARY_PATH = Path.home() / ".atif" / "library.json"
+from . import store
+
+LIBRARY_PATH = store.ROOT / "library.json"
 VERSION = 1
 
 # Two viewers can be open at once; serialise our own writes and let the atomic
@@ -33,6 +32,13 @@ _DEFAULTS: dict[str, Any] = {
     # keys — "12" at the top level, "<trajectory>-3" inside a subagent, whose
     # ids restart at 1 — so a star cannot land on the wrong step.
     "starred_steps": [],
+    # Summaries the model has already produced, by tool-call id. Cached here so
+    # a call is paid for once, and so they survive a restart like any other note.
+    "summaries": {},
+    # Whether this transcript may be sent to the model at all. On by default,
+    # but a single switch turns every AI control off for one session — useful
+    # when a transcript holds something that should not leave the machine.
+    "ai": True,
 }
 
 
@@ -41,44 +47,17 @@ def _now() -> str:
 
 
 def load(path: Path | None = None) -> dict[str, dict]:
-    """Every annotation, by key. A missing or damaged file reads as empty.
-
-    Losing annotations is bad; refusing to start because one byte is wrong is
-    worse, so a corrupt file is treated as absent rather than raised.
-    """
-    path = path or LIBRARY_PATH
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    entries = data.get("entries") if isinstance(data, dict) else None
+    """Every annotation, by key. A missing or damaged file reads as empty."""
+    data = store.read_json(path or LIBRARY_PATH)
+    entries = data.get("entries")
     if not isinstance(entries, dict):
         return {}
     return {k: v for k, v in entries.items() if isinstance(v, dict)}
 
 
 def save(entries: dict[str, dict], path: Path | None = None) -> None:
-    """Write the whole library atomically.
-
-    Writing in place would leave a truncated file if the process died mid-write,
-    losing every annotation; a temp file plus os.replace either fully lands or
-    leaves the previous version untouched.
-    """
-    path = path or LIBRARY_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"version": VERSION, "entries": entries}, indent=2)
-    handle = tempfile.NamedTemporaryFile(
-        "w", dir=path.parent, prefix=".library-", suffix=".tmp", delete=False
-    )
-    try:
-        with handle as out:
-            out.write(payload)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(handle.name, path)
-    except BaseException:
-        Path(handle.name).unlink(missing_ok=True)
-        raise
+    """Write the whole library atomically."""
+    store.write_json(path or LIBRARY_PATH, {"version": VERSION, "entries": entries})
 
 
 def get(key: str, path: Path | None = None) -> dict:
@@ -141,15 +120,23 @@ def update(key: str, path: Path | None = None, **fields: Any) -> dict:
                 record["tags"] = _clean_tags(value)
             elif name == "starred_steps":
                 record["starred_steps"] = _clean_steps(value)
+            elif name == "summaries":
+                record["summaries"] = {
+                    str(k)[:120]: str(v)[:4000]
+                    for k, v in (value or {}).items()
+                    if isinstance(k, str) and isinstance(v, str)
+                } if isinstance(value, dict) else {}
             elif name == "folder":
                 record["folder"] = _clean_folder(value)
-            elif name == "starred":
-                record["starred"] = bool(value)
+            elif name in ("starred", "ai"):
+                record[name] = bool(value)
             else:
                 record[name] = str(value).strip()[:500] if value is not None else ""
         record.setdefault("added", _now())
-        # An entry annotated back to nothing is not worth keeping.
-        if any(record[f] for f in _DEFAULTS):
+        # An entry annotated back to its defaults is not worth keeping. Compared
+        # against the defaults rather than tested for falsiness, because a
+        # default can be True: "ai" is, so `any()` would keep every entry alive.
+        if {k: v for k, v in record.items() if k != "added"} != _DEFAULTS:
             entries[key] = record
         else:
             entries.pop(key, None)

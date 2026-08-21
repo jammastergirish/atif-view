@@ -32,11 +32,12 @@ def _get(url: str):
 
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
-    """Never let a test touch the real library, index or opened-file store."""
+    """Never let a test touch the real library, index, settings or file store."""
     from atif_make import corpus
-    from atif_view import library, viewer
+    from atif_view import config, library
 
     monkeypatch.setattr(library, "LIBRARY_PATH", tmp_path / "library.json")
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.json")
     monkeypatch.setattr(corpus, "OPENED_ROOT", tmp_path / "opened")
     monkeypatch.setattr(corpus, "INDEX_PATH", tmp_path / "index.json")
 
@@ -499,3 +500,90 @@ def test_deleting_the_last_file_clears_the_whole_store_directory(server, tmp_pat
     urllib.request.urlopen(request, timeout=5).read()
     assert not stored.exists()
     assert not stored.parent.exists(), "the empty store directory was left behind"
+
+
+# ---- settings and the AI gate -------------------------------------------------
+
+
+def _try_post(url: str, body: dict) -> tuple[int, dict]:
+    """POST that reports a refusal instead of raising, so it can be asserted on."""
+    try:
+        return _post_json(url, body)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def _raise_unavailable():
+    from atif_view import ai
+
+    raise ai.Unavailable("none here")
+
+
+@pytest.fixture
+def credentialed(monkeypatch):
+    """Pretend a credential is configured, without one being present."""
+    from atif_view import ai
+
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    return ai
+
+
+def test_ai_is_off_when_nothing_is_configured(server, monkeypatch):
+    from atif_view import ai, config
+
+    monkeypatch.setattr(ai, "_client", _raise_unavailable)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert config.api_key() is None
+    state = _index(server)["ai"]
+    assert state["available"] is False and state["hint"] == ""
+
+
+def test_the_ai_endpoint_refuses_without_a_credential(server, monkeypatch):
+    from atif_view import ai
+
+    monkeypatch.setattr(ai, "_client", _raise_unavailable)
+    status, payload = _try_post(server + "/api/ai", {"key": _first_key(server), "what": "ask"})
+    assert status == 501
+    assert "not configured" in payload["error"]
+
+
+def test_a_saved_key_is_never_returned_to_the_page(server, credentialed):
+    secret = "sk-ant-api03-" + "z" * 40
+    status, payload = _try_post(server + "/api/settings", {"api_key": secret})
+    assert status == 200
+    assert secret not in json.dumps(payload)
+    assert payload["source"] == "settings" and payload["hint"] == "\u2026zzzz"
+    assert secret not in json.dumps(_index(server))
+
+
+def test_a_key_that_is_not_one_is_refused(server, credentialed):
+    status, payload = _try_post(server + "/api/settings", {"api_key": "nope"})
+    assert status == 400
+    assert "does not look like" in payload["error"]
+
+
+def test_a_saved_key_can_be_removed(server, credentialed):
+    _try_post(server + "/api/settings", {"api_key": "sk-ant-api03-" + "z" * 40})
+    status, payload = _try_post(server + "/api/settings", {"clear": True})
+    assert status == 200
+    assert payload["hint"] == ""
+
+
+def test_switching_ai_off_for_a_transcript_refuses_at_the_server(server, credentialed):
+    """Hiding the controls is not enough; the endpoint must refuse too."""
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "ai": False})
+    assert _sessions(server)[0]["ai"] is False
+
+    status, payload = _try_post(
+        server + "/api/ai", {"key": key, "what": "ask", "question": "hi"}
+    )
+    assert status == 403
+    assert "switched off" in payload["error"]
+
+
+def test_switching_ai_back_on_restores_it(server, credentialed):
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "ai": False})
+    _try_post(server + "/api/library", {"key": key, "ai": True})
+    assert _sessions(server)[0]["ai"] is True

@@ -1,6 +1,6 @@
 [project]
 name = "atif-view"
-version = "0.3.1"
+version = "0.4.0"
 description = "Browse ATIF v1.7 trajectories in a local, dependency-free web viewer."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,6 +10,11 @@ license = { text = "MIT" }
 # 0.2.0 is the floor, not politeness: Entry gained the content key this
 # viewer addresses sessions by, so an older atif-make crashes on the index.
 dependencies = ["atif-make>=0.2.0"]
+
+[project.optional-dependencies]
+# Claude-backed explanations are opt-in, so the default install stays
+# dependency-free: pip install "atif-view[ai]"
+ai = ["anthropic>=0.40"]
 
 [project.scripts]
 atif-view = "atif_view.cli:main"
