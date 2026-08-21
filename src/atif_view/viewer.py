@@ -1516,7 +1516,17 @@ class _Handler(BaseHTTPRequestHandler):
         if entry is not None and entry.origin == "opened":
             source = Path(entry.path)
             if corpus.OPENED_ROOT in source.parents:
-                shutil.rmtree(source.parent, ignore_errors=True)
+                # An unpacked archive puts several logs under one directory, so
+                # clearing it wholesale would delete the siblings' files and
+                # leave their index rows pointing at nothing.
+                store = corpus.OPENED_ROOT / source.relative_to(corpus.OPENED_ROOT).parts[0]
+                shares = any(
+                    e.key != key and store in Path(e.path).parents for e in self.entries
+                )
+                if shares:
+                    source.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(store, ignore_errors=True)
                 removed_copy = True
             with self.lock:
                 self.entries = [e for e in self.entries if e.key != key]

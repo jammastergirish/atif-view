@@ -462,3 +462,40 @@ def test_renaming_from_the_transcript_uses_the_same_endpoint(server):
     key = _first_key(server)
     _post_json(server + "/api/library", {"key": key, "title": "Renamed here"})
     assert {r["key"]: r for r in _sessions(server)}[key]["title"] == "Renamed here"
+
+
+def test_deleting_one_file_from_an_archive_spares_its_siblings(server, tmp_path):
+    """An unpacked archive shares a directory; removing one entry must not
+    delete the other's file and leave its row pointing at nothing."""
+    import zipfile
+
+    bundle = tmp_path / "pair.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("one.jsonl", LOG.replace('"session_id": "c"', '"session_id": "one"'))
+        archive.writestr("two.jsonl", LOG.replace('"session_id": "c"', '"session_id": "two"'))
+
+    _, result = _post(server + "/api/open", bundle.read_bytes(), "pair.zip")
+    assert result["added"] == 2
+    first, second = result["keys"]
+
+    rows = {r["key"]: Path(r["path"]) for r in _sessions(server)}
+    request = urllib.request.Request(server + f"/api/library?id={first}", method="DELETE")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert json.loads(response.read())["removed_copy"] is True
+
+    assert not rows[first].exists()
+    assert rows[second].exists(), "the sibling's file was deleted with it"
+    # And it is still openable, not an orphaned row.
+    assert _get(server + f"/api/raw?id={second}")[0] == 200
+
+
+def test_deleting_the_last_file_clears_the_whole_store_directory(server, tmp_path):
+    payload = LOG.replace('"session_id": "c"', '"session_id": "solo"').encode()
+    _, result = _post(server + "/api/open", payload, "solo.jsonl")
+    key = result["keys"][0]
+    stored = {r["key"]: Path(r["path"]) for r in _sessions(server)}[key]
+
+    request = urllib.request.Request(server + f"/api/library?id={key}", method="DELETE")
+    urllib.request.urlopen(request, timeout=5).read()
+    assert not stored.exists()
+    assert not stored.parent.exists(), "the empty store directory was left behind"
