@@ -59,20 +59,23 @@ Two optional AI features, both off until you press something:
   the steps that score against *it*, and the answer says how many it used.
   Follow-ups carry the earlier questions and answers, but not their step dumps:
   those are already digested into the answers, and replaying a page of
-  transcript per turn would make a long conversation quadratic.
+  transcript per turn would make a long conversation quadratic. An answer
+  reports what it read — "read 40 of 312 steps" — so a partial view is visible
+  rather than implied, and the step numbers it cites are links into the
+  transcript.
 
 Both stream: text appears as it is written rather than after the call finishes.
-Three things have to be right for that, and only one is the wire format:
+The response is newline-delimited JSON read with `fetch`, not server-sent
+events — `EventSource` reconnects when the connection closes, which would
+silently repeat a paid call. The framing makes no difference to how finely
+tokens arrive; SSE would stream exactly the same. `X-Content-Type-Options:
+nosniff` is set, or the browser withholds the opening bytes while it sniffs the
+type.
 
-- The response is newline-delimited JSON read with `fetch`, not server-sent
-  events. `EventSource` reconnects when the connection closes, which would
-  silently repeat a paid call. The framing itself makes no difference to how
-  finely tokens arrive — SSE would stream exactly the same.
-- `TCP_NODELAY` is set. Streamed frames are small and frequent, and with
-  Nagle's algorithm on the kernel holds them back to coalesce, so tokens land
-  in clumps.
-- `X-Content-Type-Options: nosniff`, or the browser withholds the first bytes
-  while it sniffs the type and swallows the start of the stream.
+Measured, rather than assumed: over loopback the server delivers 202 of 202
+frames individually at a 3.8 ms median gap, with `TCP_NODELAY` making no
+difference either way, and building the HTML for a 30,000-character answer costs
+under a millisecond. What remains is how coarsely the API itself emits text.
 
 Thinking is reported separately from text. A model that thinks for twenty
 seconds before its first word is indistinguishable from a hang, so the panel

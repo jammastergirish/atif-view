@@ -254,6 +254,8 @@ body.hide-side #main{padding-left:52px}
   animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 .askref{margin-top:7px;font:500 10px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
+.stepref{color:var(--accent);cursor:pointer;border-bottom:1px solid transparent}
+.stepref:hover{border-bottom-color:var(--accent)}
 
 /* tabs */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 18px}
@@ -1115,6 +1117,19 @@ async function streamClaude(body,onFrame){
   take(buffer);
 }
 
+const summaries = () => (INDEX.find(e=>e.key===cur)||{}).summaries||{};
+
+/* A summary already paid for is simply shown — there is nothing left to
+   explain, and making someone press a button to reveal text they already own
+   is a click that buys nothing. Only a call without one offers the button. */
+function callSummary(id){
+  const cached=(summaries()[id]||"").trim();
+  if(!cached)return `<button class="aibtn" onclick="explainCall(event,'${id}')"
+      title="Send this one call to Claude and explain it">explain this call</button>
+    <div class="aiout" id="ai-${id}" hidden></div>`;
+  return `<div class="aiout" id="ai-${id}"><span class="ail">summary</span>${md(cached)}</div>`;
+}
+
 async function explainCall(event,callId){
   event.preventDefault();event.stopPropagation();
   const box=document.getElementById("ai-"+callId);
@@ -1133,6 +1148,9 @@ async function explainCall(event,callId){
     });
     box.className="aiout";
     box.innerHTML=`<span class="ail">summary</span>${md(text)}`;
+    // Remember it locally too, so a re-render shows it without asking again.
+    const rec=INDEX.find(e=>e.key===cur);
+    if(rec&&text.trim())rec.summaries={...(rec.summaries||{}),[callId]:text.trim()};
   }catch(err){
     box.className="aiout bad";
     box.textContent=err.message;
@@ -1154,7 +1172,7 @@ async function askSession(event){
 
   try{
     await streamClaude({what:"ask",question,history},frame=>{
-      if(frame.t==="steps")turn.steps=frame.steps;
+      if(frame.t==="steps"){turn.steps=frame.steps;turn.total=frame.total}
       else if(frame.t==="thinking")turn.thinking=true;
       else if(frame.t==="delta"){turn.a+=frame.text;turn.thinking=false}
       paintTurns();
@@ -1170,12 +1188,32 @@ async function askSession(event){
 
 /* Repaint only the conversation. A full render() would rebuild the question
    field and steal focus on every token; the input deliberately sits outside
-   the repainted region. */
+   the repainted region.
+
+   While text is streaming, only the last turn changes, so only that node is
+   written — replacing the whole conversation would make the browser reparse
+   every earlier answer on every token. Repaints are coalesced to one per
+   animation frame, since tokens arrive faster than a screen refreshes. */
+const nextFrame=globalThis.requestAnimationFrame||(f=>setTimeout(f,16));
+let PAINTING=false;
+
 function paintTurns(){
-  const el=document.querySelector(".turns");
-  if(el)el.innerHTML=turnsHTML();
-  else render();
-  const last=document.querySelector(".turn:last-child");
+  if(PAINTING)return;
+  PAINTING=true;
+  nextFrame(()=>{PAINTING=false;drawTurns()});
+}
+
+function drawTurns(){
+  const host=document.querySelector(".turns");
+  if(!host){render();return}
+  const nodes=host.querySelectorAll(".turn");
+  const live=CHAT[CHAT.length-1];
+  if(nodes.length===CHAT.length&&live){
+    const body=nodes[nodes.length-1].querySelector(".askout");
+    if(body){body.className=turnClass(live);body.innerHTML=turnBody(live);return}
+  }
+  host.innerHTML=turnsHTML();
+  const last=host.querySelector(".turn:last-child");
   if(last&&CHAT.length>1)last.scrollIntoView({block:"nearest"});
 }
 
@@ -1451,18 +1489,50 @@ function askInner(){
   </div>`;
 }
 
+/* What the answer was allowed to see. The bare count was misleading: nearly
+   every question hits the same ceiling, so the number described the cap rather
+   than the transcript. Against the total it says something real — whether the
+   answer read everything or a sliver. */
+function coverage(turn){
+  const seen=turn.steps.length,total=turn.total||0;
+  if(!seen)return "";
+  const what=total&&seen<total
+    ?`read ${num(seen)} of ${num(total)} steps`
+    :`read all ${num(seen)} step${seen===1?"":"s"}`;
+  return `<div class="askref">${what}</div>`;
+}
+
+/* Turn "(step 42)" in an answer into a link to that step. The model is asked to
+   cite, so these are the references worth following; code is skipped, where a
+   number is likelier to be data than a citation. */
+function linkSteps(html){
+  return html.split(/(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/)
+    .map((part,i)=>i%2?part:part.replace(
+      /\bsteps?\s+\d+(?:\s*(?:,|and|&amp;|–|-)\s*\d+)*/gi,
+      m=>m.replace(/\d+/g,n=>`<span class="stepref" onclick="jumpToStep(${n})">${n}</span>`)))
+    .join("");
+}
+
+function jumpToStep(id){
+  const pos=((traj||{}).steps||[]).findIndex(s=>s.step_id===id);
+  if(pos<0)return;
+  jump(pos,id);
+}
+
+function turnBody(t){
+  return t.error?esc(t.error)
+    :t.thinking&&!t.a?"Thinking…"
+    :t.busy&&!t.a?"Reading the steps…"
+    :`${linkSteps(md(t.a))}${coverage(t)}`;
+}
+
+const turnClass=t=>`askout${t.error?" bad":""}${t.busy&&!t.a?" busy":""}`;
+
 function turnsHTML(){
-  return CHAT.map(t=>{
-    const body=t.error?esc(t.error)
-      :t.thinking&&!t.a?"Thinking…"
-      :t.busy&&!t.a?"Reading the steps…"
-      :`${md(t.a)}${t.steps.length?`<div class="askref">from ${t.steps.length} step${
-          t.steps.length===1?"":"s"}</div>`:""}`;
-    return `<div class="turn">
+  return CHAT.map(t=>`<div class="turn">
       <div class="askq">${esc(t.q)}</div>
-      <div class="askout${t.error?" bad":""}${t.busy&&!t.a?" busy":""}">${body}</div>
-    </div>`;
-  }).join("");
+      <div class="${turnClass(t)}">${turnBody(t)}</div>
+    </div>`).join("");
 }
 
 /* Provenance: what this trajectory is and where it came from. */
@@ -1619,9 +1689,7 @@ function step(s,ctx,depth,idx,prefix){
           <pre class="json">${hjson(c.arguments)}</pre></div>
         ${r?.content?`<div class="io out"><span class="iol">output</span>
           ${typeof r.content==="string"?pre(r.content):body(r.content)}</div>`:""}
-        ${aiOn()?`<button class="aibtn" onclick="explainCall(event,'${c.tool_call_id}')"
-          title="Send this one call to Claude and explain it">explain this call</button>
-          <div class="aiout" id="ai-${c.tool_call_id}" hidden></div>`:""}
+        ${aiOn()?callSummary(c.tool_call_id):""}
       </div></details>`;
     for(const ref of refs)h+=branch(ref,ctx,depth);
   }
@@ -1773,11 +1841,6 @@ def _associated_files(source: Path) -> list[dict]:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    # Streamed frames are small and frequent. With Nagle on, the kernel holds
-    # them back waiting for more to coalesce, so tokens arrive in clumps
-    # instead of as they are produced.
-    disable_nagle_algorithm = True
-
     entries: list[Entry] = []
     cache: dict[str, dict] = {}
     media: dict[str, dict] = {}
@@ -2100,10 +2163,13 @@ class _Handler(BaseHTTPRequestHandler):
     def _stream_ask(self, question: str, trajectory: dict, history: Any) -> None:
         """Answer a question, saying which steps it is reading first."""
         turns = history if isinstance(history, list) else []
-        used, chunks = ai.ask_stream(question, trajectory.get("steps", []), turns)
+        steps = trajectory.get("steps", [])
+        used, chunks = ai.ask_stream(question, steps, turns)
 
         def produce():
-            yield {"t": "steps", "steps": used}
+            # The total matters as much as the count: 40 of 40 means the whole
+            # transcript was read, 40 of 3,000 means the answer saw a sliver.
+            yield {"t": "steps", "steps": used, "total": len(steps)}
             try:
                 for kind, piece in chunks:
                     # Thinking is signalled, not shown: the point is that

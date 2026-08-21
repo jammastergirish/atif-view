@@ -460,16 +460,11 @@ test("the first token replaces the thinking notice", () => {
   assert.match(html, /because/);
 });
 
-test("the step count appears once the steps frame lands", () => {
+test("coverage appears once the steps frame lands", () => {
   const html = run(`
-    CHAT=[{q:"why",a:"done",steps:[3,9],busy:false}];
+    CHAT=[{q:"why",a:"done",steps:[3,9],total:80,busy:false}];
     return turnsHTML();`);
-  assert.match(html, /from 2 steps/);
-});
-
-test("one step reads as a step, not steps", () => {
-  const html = run(`CHAT=[{q:"q",a:"a",steps:[4],busy:false}];return turnsHTML();`);
-  assert.match(html, /from 1 step</);
+  assert.match(html, /read 2 of 80 steps/);
 });
 
 test("an error replaces that turn's answer rather than appending to it", () => {
@@ -569,6 +564,109 @@ test("a refusal before the stream opens surfaces its status message", async () =
       cur="k";
       return streamClaude({what:"ask"},()=>{});`),
     /switched off/,
+  );
+});
+
+test("coverage says what was read against the whole transcript", () => {
+  const partial = run(`return coverage({steps:new Array(40).fill(0),total:312});`);
+  assert.match(partial, /read 40 of 312 steps/);
+});
+
+test("coverage says so plainly when the whole transcript was read", () => {
+  assert.match(run(`return coverage({steps:[1,2,3],total:3});`), /read all 3 steps/);
+  assert.match(run(`return coverage({steps:[1],total:1});`), /read all 1 step</);
+});
+
+test("coverage is omitted until the steps are known", () => {
+  assert.strictEqual(run(`return coverage({steps:[],total:0});`), "");
+});
+
+test("a cited step becomes a link to that step", () => {
+  const html = run(`return linkSteps("<p>the parser retried (step 12).</p>");`);
+  assert.match(html, /jumpToStep\(12\)/);
+  assert.match(html, />12</);
+});
+
+test("several cited steps each become their own link", () => {
+  const html = run(`return linkSteps("<p>see steps 4, 9 and 11.</p>");`);
+  assert.deepStrictEqual(
+    [...html.matchAll(/jumpToStep\((\d+)\)/g)].map((m) => m[1]),
+    ["4", "9", "11"],
+  );
+});
+
+test("a number inside code is left alone", () => {
+  const html = run(`return linkSteps("<p>run <code>step 7</code> now</p>");`);
+  assert.ok(!/jumpToStep/.test(html), "linked a step number inside code");
+});
+
+test("a number in a code block is left alone", () => {
+  const block = '<pre class="code"><code>step 3</code></pre>';
+  const html = run(`return linkSteps(${JSON.stringify(block)});`);
+  assert.ok(!/jumpToStep/.test(html));
+});
+
+test("prose that is not a citation is left alone", () => {
+  for (const text of ["it took 40 attempts", "step by step", "stepped through"]) {
+    assert.ok(
+      !run(`return linkSteps(${JSON.stringify("<p>" + text + "</p>")});`).includes("jumpToStep"),
+      `linked a non-citation in: ${text}`,
+    );
+  }
+});
+
+test("jumping to a step nobody has is ignored rather than throwing", () => {
+  assert.doesNotThrow(() =>
+    run(`traj={steps:[{step_id:1}]};return jumpToStep(99);`),
+  );
+});
+
+test("only the streaming turn is rewritten while text arrives", () => {
+  const written = [];
+  const out = run(`
+    CHAT=[{q:"one",a:"first",steps:[1],total:9,busy:false},
+          {q:"two",a:"grow",steps:[2],total:9,busy:true}];
+    const body={className:"",set innerHTML(v){globalThis.__written.push(v)}};
+    const turn={querySelector:()=>body};
+    document.querySelector=sel=>sel===".turns"
+      ?{querySelectorAll:()=>[{},turn],querySelector:()=>null,
+        set innerHTML(v){globalThis.__written.push("WHOLE")}}
+      :null;
+    return drawTurns();`, (globalThis.__written = written));
+  assert.strictEqual(written.length, 1, "more than one node was written");
+  assert.ok(!written[0].includes("WHOLE"), "the whole conversation was rebuilt");
+  assert.match(written[0], /grow/);
+  assert.ok(!written[0].includes("first"), "an earlier answer was re-rendered");
+});
+
+test("a call with a cached summary shows it instead of a button", () => {
+  const html = run(`
+    AI={available:true};cur="k";
+    INDEX=[{key:"k",summaries:{c1:"It listed the directory."}}];
+    return callSummary("c1");`);
+  assert.match(html, /It listed the directory/);
+  assert.ok(!html.includes("aibtn"), "still asking for something already paid for");
+  assert.ok(!html.includes("hidden"), "the cached summary is hidden");
+});
+
+test("a call without one still offers the button", () => {
+  const html = run(`
+    AI={available:true};cur="k";INDEX=[{key:"k",summaries:{}}];
+    return callSummary("c2");`);
+  assert.match(html, /explain this call/);
+  assert.match(html, /hidden/);
+});
+
+test("a blank cached summary is not treated as one", () => {
+  const html = run(`
+    AI={available:true};cur="k";INDEX=[{key:"k",summaries:{c3:"   "}}];
+    return callSummary("c3");`);
+  assert.match(html, /explain this call/);
+});
+
+test("a session with no annotations at all does not throw", () => {
+  assert.doesNotThrow(() =>
+    run(`AI={available:true};cur="k";INDEX=[{key:"k"}];return callSummary("c9");`),
   );
 });
 
