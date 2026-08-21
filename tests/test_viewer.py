@@ -528,6 +528,21 @@ def credentialed(monkeypatch):
     return ai
 
 
+def test_a_saved_key_with_no_sdk_says_which_piece_is_missing(server, monkeypatch):
+    """The failure that read as "the save didn't work": key stored, SDK absent."""
+    from atif_view import ai, config
+
+    config.set_api_key("sk-ant-api03-" + "q" * 40)
+    monkeypatch.setattr(
+        ai, "_client", lambda: (_ for _ in ()).throw(ai.Unavailable("no anthropic package"))
+    )
+    state = _index(server)["ai"]
+    assert state["available"] is False
+    assert state["source"] == "settings", "the saved key must still be reported"
+    assert state["hint"] == "…qqqq"
+    assert "no anthropic package" in state["reason"]
+
+
 def test_ai_is_off_when_nothing_is_configured(server, monkeypatch):
     from atif_view import ai, config
 
@@ -536,6 +551,7 @@ def test_ai_is_off_when_nothing_is_configured(server, monkeypatch):
     assert config.api_key() is None
     state = _index(server)["ai"]
     assert state["available"] is False and state["hint"] == ""
+    assert state["reason"], "an unavailable state must say why"
 
 
 def test_the_ai_endpoint_refuses_without_a_credential(server, monkeypatch):

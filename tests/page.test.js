@@ -408,7 +408,20 @@ test("the settings sheet never renders a key, only where one came from", () => {
     showKeyState();
     return el.textContent;`);
   assert.match(out, /\u20261234/);
+  assert.match(out, /AI features are on/);
   assert.ok(!/sk-ant/.test(out));
+});
+
+test("a saved key with no SDK reads as saved, not as a failed save", () => {
+  const out = run(`
+    AI={available:false,source:"settings",hint:"\u2026GQAA",
+        reason:"The anthropic package is not installed."};
+    const el={textContent:"",className:""};
+    document.getElementById=()=>el;
+    showKeyState();
+    return el.textContent;`);
+  assert.match(out, /Key saved here/);
+  assert.match(out, /anthropic package is not installed/);
 });
 
 test("an unconfigured viewer says so rather than showing a stale key", () => {
@@ -418,7 +431,7 @@ test("an unconfigured viewer says so rather than showing a stale key", () => {
     document.getElementById=()=>el;
     showKeyState();
     return el.textContent;`);
-  assert.match(out, /No key configured/);
+  assert.match(out, /No key saved/);
 });
 
 // ---- runner --------------------------------------------------------------------

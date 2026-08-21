@@ -36,7 +36,7 @@ def _client():
         import anthropic
     except ImportError as exc:  # pragma: no cover - depends on the extra
         raise Unavailable(
-            'AI features need the optional extra: pip install "atif-view[ai]"'
+            'The anthropic package is not installed: uv tool install "atif-view[ai]"'
         ) from exc
     try:
         # A key from settings, else the SDK's own resolution: ANTHROPIC_API_KEY,
@@ -46,17 +46,26 @@ def _client():
         return anthropic.Anthropic(api_key=stored) if stored else anthropic.Anthropic()
     except Exception as exc:
         raise Unavailable(
-            "No Anthropic credential found. Set ANTHROPIC_API_KEY or run `ant auth login`."
+            "No Anthropic credential found. Add a key here, or set ANTHROPIC_API_KEY."
         ) from exc
 
 
-def available() -> bool:
-    """Whether the button should be offered at all."""
+def status() -> tuple[bool, str]:
+    """Whether AI can run, and if not, what is missing.
+
+    A bare boolean was not enough: a saved key with no SDK installed looks
+    exactly like no key at all, which reads as "the save didn't work".
+    """
     try:
         _client()
-    except Unavailable:
-        return False
-    return True
+    except Unavailable as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def available() -> bool:
+    """Whether the controls should be offered at all."""
+    return status()[0]
 
 
 def _say(client, system: str, prompt: str, max_tokens: int) -> str:

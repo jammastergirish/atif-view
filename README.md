@@ -65,6 +65,15 @@ click, of yours.
 uv tool install "atif-view[ai]"    # brings in the anthropic SDK
 ```
 
+The SDK and a credential are two separate requirements, and Settings names
+whichever is missing — a key saved with no SDK installed still reports as saved,
+rather than looking like the save failed. Running from a checkout, the extra is
+not implied:
+
+```sh
+uv run --extra ai atif-view
+```
+
 Then either export `ANTHROPIC_API_KEY`, or paste a key into **Settings** in the
 top bar. A key set in Settings is stored at `~/.atif/config.json`, mode `0600`
 inside a `0700` directory; it is sent to the Anthropic API and nowhere else, and
@@ -219,6 +228,9 @@ the tests will resolve the published one:
 ```sh
 uv run --with-editable ../atif-make pytest
 ```
+
+Add `--extra ai` to either command to exercise the AI paths against a real SDK;
+the tests stub the model call, so this never contacts the API.
 
 The suite starts a real server on an ephemeral port and exercises the endpoints,
 including that it binds loopback only. It is isolated from your own library,

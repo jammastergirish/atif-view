@@ -202,6 +202,7 @@ body.hide-side #main{padding-left:52px}
 .sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0}
 .sheet .fine code{font:11px var(--font-mono);color:var(--ink)}
 .sheet .fine.bad{color:var(--danger)}
+.sheet .fine.warn{color:var(--ink)}
 .sheet .row{display:flex;gap:8px;margin-top:16px}
 .sheet .row button{border:1px solid var(--line);background:var(--surface);color:var(--ink);
   border-radius:5px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer}
@@ -1028,14 +1029,19 @@ function openSettings(){
 }
 const closeSettings=()=>{modal.hidden=true};
 
+/* Two independent things must both be true — a credential and the SDK — so
+   say which one is missing. Reporting only "unavailable" made a saved key look
+   like a failed save. */
 function showKeyState(){
   const el=document.getElementById("keystate");
   if(!el)return;
-  el.textContent=AI.source==="settings"
-      ?`Using the key saved here (${AI.hint}) · model ${AI.model}`
-    :AI.source==="environment"
-      ?`Using ANTHROPIC_API_KEY from the environment · model ${AI.model}`
-      :"No key configured — AI features are hidden.";
+  const stored=AI.source==="settings"?`Key saved here (${AI.hint}).`
+    :AI.source==="environment"?"Using ANTHROPIC_API_KEY from the environment."
+    :"No key saved.";
+  el.textContent=AI.available
+    ?`${stored} AI features are on · model ${AI.model}`
+    :`${stored} ${AI.reason||"AI features are off."}`;
+  el.className=AI.available?"fine":"fine warn";
 }
 
 async function settings(body){
@@ -1627,8 +1633,10 @@ def _ai_state() -> dict:
     Never the key itself — only a four-character tail, enough to tell two
     apart. A page that cannot read the key cannot leak it.
     """
+    ok, reason = ai.status()
     return {
-        "available": ai.available(),
+        "available": ok,
+        "reason": reason,
         "source": config.source(),
         "hint": config.hint(),
         "model": ai.MODEL,
