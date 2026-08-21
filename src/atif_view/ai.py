@@ -21,11 +21,12 @@ from . import config
 
 MODEL = "claude-opus-5"
 
-# A whole transcript can run to millions of tokens — one here is 7.6M against a
-# 1M window — so a question is answered from the steps that look relevant
-# rather than the lot.
+# Most transcripts are small enough to send whole; a few are not. The largest
+# here is 8,445 steps and 12.9M characters, so there has to be a ceiling — but
+# it applies only when a session actually exceeds it.
 ASK_BUDGET_CHARS = 300_000
 ASK_STEPS = 40
+STEP_CLIP = 8_000
 
 
 class Unavailable(RuntimeError):
@@ -215,19 +216,35 @@ def _text_of(step: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def relevant_steps(
-    question: str, steps: list[dict], limit: int = ASK_STEPS
-) -> list[dict]:
-    """The steps most likely to bear on the question.
+def _fallback(steps: list[dict], limit: int, focus: list[int] | None) -> list[dict]:
+    """Nothing in the question matched anything in the transcript.
 
-    Deliberately simple: score by how many of the question's words a step
-    mentions, preferring longer words, then keep document order so the answer
-    reads chronologically. No embeddings, no index to maintain, and it degrades
-    to "the last N steps" when nothing matches.
+    A follow-up is almost always about what the last answer read, so those steps
+    are the better guess than an arbitrary slice. Only a question with no prior
+    turn to lean on gets the closing steps.
+    """
+    if focus:
+        wanted = set(focus)
+        carried = [s for s in steps if s.get("step_id") in wanted]
+        if carried:
+            return carried[:limit]
+    # Latest first: this is a recency guess, so if the budget forces a trim it
+    # should give up the oldest steps, not the newest.
+    return list(reversed(steps[-limit:]))
+
+
+def _ranked_steps(
+    question: str,
+    steps: list[dict],
+    limit: int = ASK_STEPS,
+    focus: list[int] | None = None,
+) -> list[dict]:
+    """The candidate steps, best first.
+
+    Priority order rather than document order, so that a budget trim gives up
+    the least useful steps instead of whichever happen to come last.
     """
     words = {w for w in re.findall(r"[a-zA-Z_][\w./-]{2,}", question.lower())}
-    if not words:
-        return steps[-limit:]
 
     # A question says "authentication" where the transcript says "test_auth.py",
     # so a long word also scores, at a discount, on its first four characters.
@@ -246,28 +263,69 @@ def relevant_steps(
         if score:
             scored.append((score, step.get("step_id", 0), step))
 
+    # "Nothing matched" is the condition that matters, not "no words": a
+    # question can be all common words and still hit nothing.
+    if not scored:
+        return _fallback(steps, limit, focus)
+
     scored.sort(key=lambda row: (-row[0], row[1]))
-    chosen = [row[2] for row in scored[:limit]] or steps[-limit:]
-    return sorted(chosen, key=lambda s: s.get("step_id", 0))
+    return [row[2] for row in scored[:limit]]
 
 
-def _ask_prompt(question: str, steps: list[dict]) -> tuple[str, list[int]]:
-    """The prompt, and the step numbers that went into it."""
-    chosen = relevant_steps(question, steps)
+def relevant_steps(
+    question: str,
+    steps: list[dict],
+    limit: int = ASK_STEPS,
+    focus: list[int] | None = None,
+) -> list[dict]:
+    """The steps most likely to bear on the question, in document order.
 
-    rendered: list[str] = []
-    used: list[int] = []
-    budget = ASK_BUDGET_CHARS
-    for step in chosen:
-        body = _text_of(step)[:8000]
-        block = f"--- step {step.get('step_id')} ({step.get('source')}) ---\n{body}"
-        if len(block) > budget:
-            break
-        budget -= len(block)
-        rendered.append(block)
-        used.append(step.get("step_id", 0))
+    Scored by how many of the question's words a step mentions, preferring
+    longer words, then sorted chronologically so an answer reads in order.
+    Only reached when a transcript is too large to send whole.
+    """
+    return sorted(
+        _ranked_steps(question, steps, limit, focus),
+        key=lambda s: s.get("step_id", 0),
+    )
 
-    return f"Question: {question}\n\nSteps:\n\n" + "\n\n".join(rendered), used
+
+def _block(step: dict) -> str:
+    body = _text_of(step)[:STEP_CLIP]
+    return f"--- step {step.get('step_id')} ({step.get('source')}) ---\n{body}"
+
+
+def _ask_prompt(
+    question: str, steps: list[dict], focus: list[int] | None = None
+) -> tuple[str, list[int]]:
+    """The prompt, and the step numbers that went into it.
+
+    When the whole transcript fits, the whole transcript goes. Choosing forty
+    steps out of a session that would fit entire only throws information away,
+    and most sessions are that size — selection is the exception, not the rule.
+    """
+    whole = [_block(s) for s in steps]
+    if sum(len(b) + 2 for b in whole) <= ASK_BUDGET_CHARS:
+        chosen = steps
+    else:
+        # Trimmed in priority order, then read back in document order: what
+        # survives the budget should be the most useful steps, but the model
+        # should still see them chronologically.
+        kept: list[dict] = []
+        budget = ASK_BUDGET_CHARS
+        for step in _ranked_steps(question, steps, focus=focus):
+            size = len(_block(step))
+            # Skipped, not stopped at: one oversized step used to truncate every
+            # step after it, including small ones that would have fitted.
+            if size > budget:
+                continue
+            budget -= size
+            kept.append(step)
+        chosen = sorted(kept, key=lambda s: s.get("step_id", 0))
+
+    used = [s.get("step_id", 0) for s in chosen]
+    body = "\n\n".join(_block(s) for s in chosen)
+    return f"Question: {question}\n\nSteps:\n\n{body}", used
 
 
 def _history(turns: list[dict] | None) -> list[dict]:
@@ -289,7 +347,10 @@ def _history(turns: list[dict] | None) -> list[dict]:
 
 
 def ask_stream(
-    question: str, steps: list[dict], history: list[dict] | None = None
+    question: str,
+    steps: list[dict],
+    history: list[dict] | None = None,
+    focus: list[int] | None = None,
 ) -> tuple[list[int], Iterator[tuple[str, str]]]:
     """The steps being used, and the answer as it arrives.
 
@@ -297,14 +358,17 @@ def ask_stream(
     reading while the answer is still being written.
     """
     client = _client()
-    prompt, used = _ask_prompt(question, steps)
+    prompt, used = _ask_prompt(question, steps, focus)
     messages = [*_history(history), {"role": "user", "content": prompt}]
     return used, _stream(client, ASK_SYSTEM, messages, max_tokens=4000)
 
 
 def ask(
-    question: str, steps: list[dict], history: list[dict] | None = None
+    question: str,
+    steps: list[dict],
+    history: list[dict] | None = None,
+    focus: list[int] | None = None,
 ) -> tuple[str, list[int]]:
     """Answer a question about a transcript. Returns the answer and steps used."""
-    used, chunks = ask_stream(question, steps, history)
+    used, chunks = ask_stream(question, steps, history, focus)
     return _text_only(chunks), used

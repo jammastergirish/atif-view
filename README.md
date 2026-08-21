@@ -55,14 +55,23 @@ Two optional AI features, both off until you press something:
 - **explain this call** — on any tool call, summarises what it tried to do and
   what came back. The summary is kept, so you pay for it once.
 - **Ask Claude** — a collapsible panel holding a conversation about the
-  session. A transcript can run to millions of tokens, so each question sends
-  the steps that score against *it*, and the answer says how many it used.
+  session. Most sessions go to the model whole; only one too large for the
+  budget is sampled, and then by scoring each step against the question. Of 81
+  sessions here, 58 are sent entire and 23 sampled.
   Follow-ups carry the earlier questions and answers, but not their step dumps:
   those are already digested into the answers, and replaying a page of
   transcript per turn would make a long conversation quadratic. An answer
-  reports what it read — "read 40 of 312 steps" — so a partial view is visible
-  rather than implied, and the step numbers it cites are links into the
-  transcript.
+  reports what it read — "read all 62 steps", or "read 40 of 312 steps" — so a
+  partial view is visible rather than implied, and the step numbers it cites are
+  links into the transcript.
+
+When sampling is needed, steps are scored by how many of the question's words
+they mention, longer words counting for more, with a long word also scoring at a
+discount on its first four characters so "authentication" finds `test_auth.py`.
+Candidates are trimmed to the budget in score order and then read back
+chronologically, so what survives is the most useful rather than the earliest.
+A question that matches nothing falls back to the steps the previous answer
+read, or, on a first question, to the closing steps.
 
 Both stream: text appears as it is written rather than after the call finishes.
 The response is newline-delimited JSON read with `fetch`, not server-sent

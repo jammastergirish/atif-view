@@ -138,7 +138,7 @@ def test_ask_reports_which_steps_it_used(monkeypatch):
         _step(3, message="beta"),
     ]
     _, used = ai.ask("beta", steps)
-    assert used == [2, 3]
+    assert used == [1, 2, 3], "a three-step transcript should go whole"
 
 
 # ---- summarising one call ------------------------------------------------------
@@ -224,7 +224,7 @@ def test_ask_knows_its_steps_before_the_first_token(monkeypatch):
     monkeypatch.setattr(ai, "_stream", fake_stream)
 
     used, chunks = ai.ask_stream("beta", [_step(1, message="alpha"), _step(2, message="beta")])
-    assert used == [2]
+    assert used == [1, 2]
     assert not started, "the steps must be known without consuming the stream"
     assert "".join(t for _, t in chunks) == "answer"
 
@@ -299,3 +299,87 @@ def test_a_question_does_use_thinking(monkeypatch):
     monkeypatch.setattr(ai, "_stream", _capture(seen))
     ai.ask("why", [_step(1)])
     assert seen["thinking"] is True
+
+
+# ---- how much of a transcript goes ------------------------------------------------
+
+
+def test_a_transcript_that_fits_is_sent_whole(monkeypatch):
+    """Selecting forty steps from a session that fits entire only loses data."""
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+
+    steps = [_step(i, message=f"step number {i}") for i in range(1, 121)]
+    _, used = ai.ask("anything", steps)
+
+    assert used == list(range(1, 121)), "a small transcript was needlessly trimmed"
+    assert len(used) > ai.ASK_STEPS, "the flat step cap is still being applied"
+
+
+def test_a_transcript_too_large_falls_back_to_selection(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture(seen))
+
+    steps = [_step(i, message="filler " * 2000) for i in range(1, 200)]
+    _, used = ai.ask("filler", steps)
+
+    assert len(used) <= ai.ASK_STEPS
+    assert len(seen["messages"][-1]["content"]) <= ai.ASK_BUDGET_CHARS + 5_000
+
+
+def test_one_huge_step_does_not_truncate_the_rest(monkeypatch):
+    """It used to stop at the first oversized block, losing every step after."""
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture({}))
+    monkeypatch.setattr(ai, "ASK_BUDGET_CHARS", 3_000)
+
+    steps = [_step(1, message="x" * 60_000)]
+    steps += [_step(i, message="small") for i in range(2, 12)]
+    _, used = ai.ask("small", steps)
+
+    assert 1 not in used, "the oversized step should not fit"
+    assert used == list(range(2, 12)), "steps after the oversized one were dropped"
+
+
+def test_a_follow_up_with_no_keywords_reuses_the_last_turn_steps(monkeypatch):
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture({}))
+    monkeypatch.setattr(ai, "ASK_BUDGET_CHARS", 3_000)
+
+    steps = [_step(i, message="content " * 60) for i in range(1, 40)]
+    _, used = ai.ask("why?", steps, focus=[7, 8, 9])
+    assert used == [7, 8, 9]
+
+
+def test_a_first_question_with_no_keywords_still_gets_the_closing_steps(monkeypatch):
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture({}))
+    monkeypatch.setattr(ai, "ASK_BUDGET_CHARS", 3_000)
+
+    steps = [_step(i, message="content " * 60) for i in range(1, 40)]
+    _, used = ai.ask("why?", steps)
+    assert used and used[-1] == 39
+
+
+def test_a_focus_naming_steps_that_are_gone_falls_back(monkeypatch):
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture({}))
+    monkeypatch.setattr(ai, "ASK_BUDGET_CHARS", 3_000)
+
+    steps = [_step(i, message="content " * 60) for i in range(1, 40)]
+    _, used = ai.ask("why?", steps, focus=[900, 901])
+    assert used, "an unusable focus left nothing to read"
+
+
+def test_selection_still_ranks_by_the_question_when_it_must(monkeypatch):
+    """The scoring is unchanged; it is simply no longer used unnecessarily."""
+    monkeypatch.setattr(ai, "_client", lambda: object())
+    monkeypatch.setattr(ai, "_stream", _capture({}))
+    monkeypatch.setattr(ai, "ASK_BUDGET_CHARS", 4_000)
+
+    steps = [_step(i, message="padding " * 100) for i in range(1, 30)]
+    steps[14]["message"] = "the authentication middleware " + "padding " * 90
+    _, used = ai.ask("authentication", steps)
+    assert 15 in used

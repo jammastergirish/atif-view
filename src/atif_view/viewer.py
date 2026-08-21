@@ -1166,12 +1166,16 @@ async function askSession(event){
   // Prior turns go up as context; the steps sent with them do not, since the
   // answers already carry what mattered.
   const history=CHAT.filter(t=>t.a&&!t.error).map(t=>({q:t.q,a:t.a}));
+  // What the last answer read. A follow-up with nothing to match on — "why?" —
+  // is almost always about those steps rather than an arbitrary slice.
+  const previous=CHAT.filter(t=>t.steps&&t.steps.length).pop();
+  const focus=previous?previous.steps:[];
   const turn={q:question,a:"",steps:[],busy:true,thinking:false};
   CHAT.push(turn);
   paintTurns();
 
   try{
-    await streamClaude({what:"ask",question,history},frame=>{
+    await streamClaude({what:"ask",question,history,focus},frame=>{
       if(frame.t==="steps"){turn.steps=frame.steps;turn.total=frame.total}
       else if(frame.t==="thinking")turn.thinking=true;
       else if(frame.t==="delta"){turn.a+=frame.text;turn.thinking=false}
@@ -1964,7 +1968,9 @@ class _Handler(BaseHTTPRequestHandler):
                     if not question:
                         self._json({"error": "ask what?"}, 400)
                         return
-                    self._stream_ask(question, trajectory, body.get("history"))
+                    self._stream_ask(
+                        question, trajectory, body.get("history"), body.get("focus")
+                    )
                 else:
                     self._json({"error": "unknown request"}, 400)
             except ai.Unavailable as exc:
@@ -2160,11 +2166,14 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._frames(produce)
 
-    def _stream_ask(self, question: str, trajectory: dict, history: Any) -> None:
+    def _stream_ask(
+        self, question: str, trajectory: dict, history: Any, focus: Any
+    ) -> None:
         """Answer a question, saying which steps it is reading first."""
         turns = history if isinstance(history, list) else []
+        earlier = [n for n in focus if isinstance(n, int)] if isinstance(focus, list) else []
         steps = trajectory.get("steps", [])
-        used, chunks = ai.ask_stream(question, steps, turns)
+        used, chunks = ai.ask_stream(question, steps, turns, earlier)
 
         def produce():
             # The total matters as much as the count: 40 of 40 means the whole
