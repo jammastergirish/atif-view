@@ -107,6 +107,13 @@ anything is written, and uploads live in a temporary directory for the session.
 step's timestamp to the last, in whatever unit fits — these range from seconds
 to `63h` across two and a half days.
 
+**Favourites.** Star individual steps inside a transcript — the star sits in
+the gutter beside the step number — and the `Favourited` lens filters to them.
+Stars are keyed the same way the step anchors are, so one set inside a subagent
+(whose ids restart at 1) cannot land on the wrong step. Rename a transcript from
+its own heading by double-clicking it, or from the table; both write the same
+record.
+
 **Finding things.** A run of several thousand steps needs more than scrolling.
 `Search this run` matches across message text, reasoning, tool names, tool
 arguments and observation output — the things a reader can actually see. Filter

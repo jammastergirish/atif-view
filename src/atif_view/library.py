@@ -29,6 +29,10 @@ _DEFAULTS: dict[str, Any] = {
     "tags": [],
     "starred": False,
     "note": "",
+    # Individual steps starred inside a transcript. Held as the viewer's step
+    # keys — "12" at the top level, "<trajectory>-3" inside a subagent, whose
+    # ids restart at 1 — so a star cannot land on the wrong step.
+    "starred_steps": [],
 }
 
 
@@ -99,6 +103,21 @@ def _clean_tags(value: Any) -> list[str]:
     return out[:20]
 
 
+def _clean_steps(value: Any) -> list[str]:
+    """Step keys, unique and order-preserved. Kept as strings because a
+    subagent's key is not a number."""
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in value:
+        key = str(item).strip()[:120]
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out[:2000]
+
+
 def _clean_folder(value: Any) -> str:
     """A '/'-nested path, with empty and stray segments dropped."""
     if not isinstance(value, str):
@@ -120,6 +139,8 @@ def update(key: str, path: Path | None = None, **fields: Any) -> dict:
                 continue
             if name == "tags":
                 record["tags"] = _clean_tags(value)
+            elif name == "starred_steps":
+                record["starred_steps"] = _clean_steps(value)
             elif name == "folder":
                 record["folder"] = _clean_folder(value)
             elif name == "starred":

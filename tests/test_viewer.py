@@ -440,3 +440,25 @@ def test_an_opened_file_survives_a_rescan_of_the_default_roots(server, tmp_path)
     assert kept, "the opened file was not written to the index"
     # Its location alone is enough to classify it on a fresh look.
     assert corpus.describe(Path(kept[0].path)).origin == "opened"
+
+
+def test_starring_steps_persists_on_the_session(server):
+    key = _first_key(server)
+    _post_json(server + "/api/library", {"key": key, "starred_steps": ["2", "5"]})
+    row = {r["key"]: r for r in _sessions(server)}[key]
+    assert row["starred_steps"] == ["2", "5"]
+
+
+def test_a_starred_step_alone_is_worth_keeping(server):
+    """A transcript with a starred step but no name must not be forgotten."""
+    key = _first_key(server)
+    _post_json(server + "/api/library", {"key": key, "starred_steps": ["7"]})
+    row = {r["key"]: r for r in _sessions(server)}[key]
+    assert row["title"] == "" and row["starred_steps"] == ["7"]
+
+
+def test_renaming_from_the_transcript_uses_the_same_endpoint(server):
+    """The heading and the table row must not disagree about a title."""
+    key = _first_key(server)
+    _post_json(server + "/api/library", {"key": key, "title": "Renamed here"})
+    assert {r["key"]: r for r in _sessions(server)}[key]["title"] == "Renamed here"

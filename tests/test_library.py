@@ -138,3 +138,25 @@ def test_the_real_library_is_never_touched_by_a_redirected_call(tmp_path, monkey
 
     assert redirected.is_file()
     assert library.get("k1")["title"] == "Only here"
+
+
+def test_starred_steps_round_trip(store):
+    library.update("k1", store, starred_steps=["3", "12", "sub-1"])
+    assert library.get("k1", store)["starred_steps"] == ["3", "12", "sub-1"]
+
+
+def test_starred_steps_are_deduped_and_stringified(store):
+    library.update("k1", store, starred_steps=[3, "3", 12, "", "  ", 12])
+    assert library.get("k1", store)["starred_steps"] == ["3", "12"]
+
+
+def test_starring_only_steps_is_enough_to_keep_the_entry(store):
+    """A transcript with a starred step but no name must not be forgotten."""
+    library.update("k1", store, starred_steps=["7"])
+    assert library.load(store)["k1"]["starred_steps"] == ["7"]
+
+
+def test_unstarring_every_step_forgets_an_otherwise_empty_entry(store):
+    library.update("k1", store, starred_steps=["7"])
+    library.update("k1", store, starred_steps=[])
+    assert library.load(store) == {}

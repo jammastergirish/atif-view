@@ -162,6 +162,8 @@ body.hide-side #main{padding-left:52px}
 /* ---- library table (Diwan's LibraryRow grid) ---- */
 .lhead{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
 .lhead h2{font:600 19px var(--font-serif);letter-spacing:-.01em}
+.hd h2{cursor:text}
+.inline.hdin{font:600 19px var(--font-serif);width:min(100%,34ch);padding:1px 7px}
 .mono{font:500 10.5px var(--font-mono);color:var(--muted)}
 .tgrid{display:grid;
   grid-template-columns:34px minmax(180px,2.4fr) 88px 84px 68px minmax(90px,1fr) 76px;
@@ -245,6 +247,13 @@ table.files tr:hover td{background:var(--sunk)}
   font-variant-numeric:tabular-nums;font-size:11.5px;font-weight:600;letter-spacing:0;
   color:var(--faint);text-decoration:none}
 .sid:hover{color:var(--accent)}
+/* The star sits in the gutter under the step number, out of the reading line. */
+.sstar{position:absolute;left:-52px;top:24px;width:38px;display:flex;justify-content:flex-end;
+  color:var(--line);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.step:hover .sstar{opacity:1}
+.sstar.on{opacity:1;color:var(--accent)}
+.sstar:hover{color:var(--accent)}
+.branch .inner .sstar{left:-40px;width:28px}
 /* Nested subagent steps sit in a narrower gutter of their own. */
 .branch .inner .step{margin-left:34px}
 .branch .inner .sid{left:-40px;top:10px;width:28px;font-size:11px}
@@ -662,7 +671,7 @@ const PAGE_SIZE=250;
 let INDEX=[],FOLDERS=[],TAGS=[],cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
-let tab="trajectory",query="",lens="all",extra=null;
+let tab="trajectory",query="",lens="all",extra=null,RENAMING=false;
 
 function reveal(a){
   fetch(a.getAttribute("href")).then(r=>{
@@ -981,7 +990,7 @@ function pick(key){
   main.innerHTML=`<div class="empty">Converting…</div>`;
   fetch("/api/trajectory?id="+encodeURIComponent(key)).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}
-    traj=t;onlyBranches=false;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;render();
+    traj=t;onlyBranches=false;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;RENAMING=false;render();
   });
 }
 
@@ -990,6 +999,14 @@ const toggleBranches=()=>{onlyBranches=!onlyBranches;limit=PAGE_SIZE;render()};
 const more=()=>{limit+=PAGE_SIZE*4;render()};
 const toggleRaw=()=>{raw=!raw;render()};
 const setLens=l=>{lens=l;limit=PAGE_SIZE;render()};
+
+function renameKey(event){
+  if(event.key==="Escape"){RENAMING=false;return render()}
+  if(event.key!=="Enter")return;
+  const value=event.target.value.trim();
+  RENAMING=false;
+  annotate(cur,{title:value});
+}
 const setQuery=v=>{query=v;limit=PAGE_SIZE;render()};
 function setTab(t){
   tab=t;
@@ -1002,14 +1019,32 @@ function setTab(t){
 
 /* What a step counts as, for the filter counts. A step can be several things
    at once: an agent turn that calls tools and carries reasoning. */
+/* Starred steps live on the session's library record, keyed the same way the
+   anchors are — plain id at the top level, trajectory-scoped inside a subagent,
+   whose ids restart at 1. */
+const stepKey = (step, prefix) => (prefix || "") + step.step_id;
+const starredSteps = () =>
+  (INDEX.find((e) => e.key === cur) || {}).starred_steps || [];
+const isStarred = (step, prefix) => starredSteps().includes(stepKey(step, prefix));
+
+async function toggleStep(event, key) {
+  event.stopPropagation();
+  const now = starredSteps();
+  const next = now.includes(key) ? now.filter((k) => k !== key) : [...now, key];
+  await annotate(cur, { starred_steps: next });
+  render();
+}
+
 function facets(s){
   const f=[s.source];
   if(s.tool_calls?.length)f.push("tools");
   if(s.reasoning_content)f.push("reasoning");
+  if(isStarred(s,""))f.push("favourited");
   return f;
 }
 const LENSES=[["all","All steps"],["user","User"],["agent","Agent"],["system","System"],
-              ["tools","Tools"],["reasoning","Reasoning"],["branches","Branches"]];
+              ["tools","Tools"],["reasoning","Reasoning"],["branches","Branches"],
+              ["favourited","Favourited"]];
 
 /* Search the text a reader can actually see: message, reasoning, tool names and
    arguments, and observation content. */
@@ -1065,7 +1100,11 @@ function render(){
 
   main.innerHTML=`
     <div class="hd">
-      <h2>${esc(short(e.project||t.session_id||"trajectory"))}</h2>
+      ${RENAMING
+        ? `<input id="rn" class="inline hdin" value="${esc(titleOf(e))}"
+             onkeydown="renameKey(event)" onblur="RENAMING=false;render()">`
+        : `<h2 ondblclick="RENAMING=true;render()"
+             title="Double-click to rename">${esc(titleOf(e))}</h2>`}
       <div class="sub">${esc(a.name)} ${esc(a.version||"")} · ${esc(a.model_name||"no model")} · ${esc(t.session_id||"")}</div>
     </div>
     <div class="stats">
@@ -1104,7 +1143,8 @@ function trajectoryTab(t,e,branches,branchSteps,counts,q){
              oninput="setQuery(this.value)" spellcheck="false">
       <div class="lenses">
         ${LENSES.filter(([k])=>k!=="branches"||branches.length)
-          .map(([k,l])=>`<span class="lens${lens===k?" on":""}" onclick="setLens('${k}')">
+          .map(([k,l])=>(k==="favourited"?`<span class="fsep"></span>`:"")
+            +`<span class="lens${lens===k?" on":""}" onclick="setLens('${k}')">
              ${l}<b>${num(counts[k]??0)}</b></span>`).join("")}
       </div>
       ${details(t,e)}
@@ -1248,8 +1288,14 @@ function step(s,ctx,depth,idx,prefix){
   // Subagent trajectories number their own steps from 1, so scope their DOM ids
   // by trajectory to keep every anchor on the page unique.
   const key=(prefix||"")+s.step_id;
+  const on=starredSteps().includes(key);
   let h=`<div class="step ${s.source}" id="step-${key}">
     <div class="role"><a class="sid" href="#step-${key}" title="step ${s.step_id}">${s.step_id}</a>
+    <span class="sstar${on?" on":""}" onclick="toggleStep(event,'${key}')"
+      title="${on?"Remove from favourites":"Add to favourites"}">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="${on?"currentColor":"none"}"
+        stroke="currentColor" stroke-width="2"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87
+        1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></span>
     <b>${esc(s.source)}</b>`;
   if(s.timestamp)h+=`<span>${esc(s.timestamp.replace("T"," ").replace(/\.\d+Z?$/,""))}</span>`;
   if(s.model_name&&s.source==="agent")h+=`<span>${esc(s.model_name)}</span>`;
