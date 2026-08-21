@@ -116,7 +116,9 @@ Then either export `ANTHROPIC_API_KEY`, or paste a key into **Settings** in the
 top bar. A key set in Settings is stored at `~/.atif/config.json`, mode `0600`
 inside a `0700` directory; it is sent to the Anthropic API and nowhere else, and
 is never read back into the page — the page only ever sees its last four
-characters. A key in your keychain or password manager is safer than one in a
+characters. With a key saved, the field shows dots and that tail, so it is
+obvious at a glance that one is there; they are a placeholder rather than a
+value, since a value could be submitted back and stored as the key. A key in your keychain or password manager is safer than one in a
 file, so prefer the environment variable if you have the choice. Settings shows
 which of the two is in use, and **Remove** clears the stored one.
 

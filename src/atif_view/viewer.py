@@ -198,6 +198,7 @@ body.hide-side #main{padding-left:52px}
 .sheet input{width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
   background:var(--surface);color:var(--ink);font:13px var(--font-mono)}
 .sheet input:focus{outline:none;border-color:var(--accent)}
+.sheet input::placeholder{color:var(--muted);opacity:1}
 .sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0}
 .sheet .fine code{font:11px var(--font-mono);color:var(--ink)}
 .sheet .fine.bad{color:var(--danger)}
@@ -1046,6 +1047,15 @@ const closeSettings=()=>{modal.hidden=true};
    say which one is missing. Reporting only "unavailable" made a saved key look
    like a failed save. */
 function showKeyState(){
+  const box=document.getElementById("akey");
+  // Dots as a placeholder, never as a value: a value can be submitted, and
+  // twenty bullets would pass the length check and be stored as the key. The
+  // page is never told the real one, so the tail is all it can show.
+  if(box)box.placeholder=
+      AI.source==="settings"?`${"•".repeat(24)} ${AI.hint}`
+    :AI.source==="environment"?"Set by ANTHROPIC_API_KEY"
+    :"sk-ant-…";
+
   const el=document.getElementById("keystate");
   if(!el)return;
   const stored=AI.source==="settings"?`Key saved here (${AI.hint}).`

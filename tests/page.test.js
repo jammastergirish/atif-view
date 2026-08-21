@@ -670,6 +670,48 @@ test("a session with no annotations at all does not throw", () => {
   );
 });
 
+test("a saved key shows as dots in the field, with its tail", () => {
+  const out = run(`
+    AI={available:true,source:"settings",hint:"\u2026GQAA",model:"claude-opus-5"};
+    const box={placeholder:"",value:""};
+    document.getElementById=id=>id==="akey"?box:null;
+    showKeyState();
+    return box.placeholder;`);
+  assert.match(out, /^•+ \u2026GQAA$/, `unexpected placeholder: ${out}`);
+});
+
+test("the dots are a placeholder, so an untouched field submits nothing", () => {
+  const out = run(`
+    AI={available:true,source:"settings",hint:"\u2026GQAA"};
+    const box={placeholder:"",value:""};
+    document.getElementById=id=>id==="akey"?box:null;
+    showKeyState();
+    return box.value;`);
+  assert.strictEqual(out, "", "dots ended up in the value and could be saved");
+});
+
+test("a key from the environment says so rather than showing dots", () => {
+  const out = run(`
+    AI={available:true,source:"environment",hint:""};
+    const box={placeholder:"",value:""};
+    document.getElementById=id=>id==="akey"?box:null;
+    showKeyState();
+    return box.placeholder;`);
+  assert.match(out, /ANTHROPIC_API_KEY/);
+  assert.ok(!out.includes("•"), "dots suggest a key is saved here when it is not");
+});
+
+test("no key at all leaves the field prompting for one", () => {
+  const out = run(`
+    AI={};
+    const box={placeholder:"",value:""};
+    document.getElementById=id=>id==="akey"?box:null;
+    showKeyState();
+    return box.placeholder;`);
+  assert.match(out, /sk-ant/);
+  assert.ok(!out.includes("•"));
+});
+
 // ---- runner --------------------------------------------------------------------
 (async () => {
   let failed = 0;
