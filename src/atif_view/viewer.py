@@ -214,8 +214,10 @@ body.hide-side #main{padding-left:52px}
 .blank{max-width:420px;margin:14vh auto 0;text-align:center;color:var(--muted)}
 .blank h2{font:600 19px var(--font-serif);color:var(--ink);margin:0 0 7px}
 .blank p{font-size:13.5px;margin:0 0 18px;line-height:1.6}
-.blank button{border:1px solid var(--accent);background:var(--accent);color:var(--bg);
-  border-radius:5px;padding:7px 16px;font:inherit;font-size:12.5px;cursor:pointer}
+.blank button{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+  border-radius:5px;padding:7px 16px;font:inherit;font-size:12.5px;cursor:pointer;
+  margin:0 3px}
+.blank button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 #urlbar{height:4px;border-radius:2px;background:var(--sunk);overflow:hidden;margin-top:11px}
 #urlbar[hidden]{display:none}
 #urlfill{height:100%;width:0;background:var(--accent);border-radius:2px;
@@ -471,20 +473,6 @@ pre.json{line-height:1.45}
     <h2>Add transcripts</h2>
 
     <section class="way">
-      <h3>From this machine</h3>
-      <p class="fine">Finds sessions Claude Code, Codex and Copilot have already
-         written here. Nothing is sent anywhere.</p>
-      <div class="row">
-        <button class="primary" id="scango" onclick="scanMachine()">Look on this machine</button>
-        <label class="aisw" title="Look again every minute while the viewer is open">
-          <input type="checkbox" id="autoscan" onchange="setAutoScan(this.checked)">
-          Keep watching
-        </label>
-      </div>
-      <p class="fine" id="scanstate"></p>
-    </section>
-
-    <section class="way">
       <h3>A file or folder</h3>
       <p class="fine">A log, a converted trajectory, a HAR, or an archive of them.
          Dragging onto the window does the same.</p>
@@ -495,10 +483,14 @@ pre.json{line-height:1.45}
 
     <section class="way">
       <h3>From a URL</h3>
-      <p class="fine">A Hugging Face dataset or GitHub repository — whole, or one
-         folder inside it — or a direct link to a single file.</p>
+      <p class="fine">A <b>Hugging Face</b> dataset, a <b>GitHub</b> repository —
+         whole, or one folder inside it — an <b>S3</b> bucket or prefix, or a direct
+         link to a single file.</p>
+      <p class="fine">S3 is read by running the <code>aws</code> CLI, so sign in with
+         <code>aws sso login --profile &lt;name&gt;</code> first and set that profile
+         in Settings.</p>
       <input id="urlin" spellcheck="false" autocomplete="off"
-             placeholder="https://huggingface.co/datasets/owner/name"
+             placeholder="https://huggingface.co/… · https://github.com/… · s3://bucket/prefix"
              onkeydown="if(event.key==='Enter')planUrl()">
       <label for="urlinto">Into</label>
       <input id="urlinto" spellcheck="false" autocomplete="off"
@@ -948,7 +940,6 @@ addEventListener("keydown",e=>{
 fetch("/api/index").then(r=>r.json()).then(d=>{
   INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
-  restoreAutoScan();
 });
 q.oninput=drawList;
 
@@ -984,6 +975,11 @@ function visibleRails(){
   };
 
   const rows=[{path:"__all",name:"All",depth:0,count:INDEX.length}];
+  // Local is shown even when empty: it is where looking on this machine lives,
+  // and a first run would otherwise have nothing to press.
+  if(!GROUPS.includes("Local")){
+    rows.push({path:"Local",name:"Local",depth:0,count:0,children:false,source:""});
+  }
   for(const n of buildForest(GROUPS)){
     if(!shown(n.path))continue;
     rows.push({...n,count:counts[n.path]||0,
@@ -1027,7 +1023,9 @@ function drawList(){
             href="${esc(r.source)}" target="_blank" rel="noreferrer noopener"
             title="Open ${esc(r.source)}"
             onclick="event.stopPropagation()">↗</a>`:""}
-          ${r.source?`<button title="Fetch this folder again"
+          ${r.path==="Local"?`<button title="Look on this machine again"
+            onclick="event.stopPropagation();scanMachine()">⟳</button>`
+            :r.source?`<button title="Fetch this folder again"
             onclick="event.stopPropagation();refreshGroup('${esc(r.path)}')">⟳</button>`:""}
           <button title="Remove these sessions from the library" class="dang"
             onclick="event.stopPropagation();dropGroup('${esc(r.path)}')">✕</button>
@@ -1085,7 +1083,6 @@ async function forget(key){
    asks no questions: same source, same destination, and anything unchanged
    hashes to what is already there. */
 async function refreshGroup(name){
-  const said=document.getElementById("scanstate");
   try{
     note(`Refreshing ${name}…`);
     let added=0;
@@ -1161,8 +1158,10 @@ function showLibrary(){
   if(!INDEX.length&&!q.value){
     main.innerHTML=`<div class="blank">
       <h2>Nothing here yet</h2>
-      <p>Add transcripts from this machine, from a file, or from a URL.</p>
-      <button class="primary" onclick="openAdd()">Add…</button>
+      <p>Look for sessions this machine has already written, or add transcripts
+         from a file or a URL.</p>
+      <button class="primary" onclick="scanMachine()">Look on this machine</button>
+      <button onclick="openAdd()">Add…</button>
     </div>`;
     return;
   }
@@ -1306,10 +1305,7 @@ function openAdd(){
   PLANNED=null;
   const err=document.getElementById("urlerr");
   if(err){err.hidden=true;err.textContent=""}
-  const said=document.getElementById("scanstate");
-  if(said)said.textContent="";
   urlmodal.hidden=false;
-  restoreAutoScan();
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
   const into=document.getElementById("urlinto");
@@ -1317,55 +1313,19 @@ function openAdd(){
   setUrlState("Nothing downloads until you have seen what is there.","Look");
 }
 
-/* Indexing a machine is a deliberate act, not something to do because the
-   library happens to be empty. Watching is that act repeated, so it is asked
-   for once and remembered — but only while the viewer is open, because
-   repeatedly reading someone's whole working history is not something to leave
-   running out of sight. */
-const SCAN_EVERY = 60_000;
-let SCAN_TIMER = null;
-
-function setAutoScan(on){
-  try{localStorage.setItem("atif-view.autoscan",on?"1":"")}catch(e){}
-  if(SCAN_TIMER){clearInterval(SCAN_TIMER);SCAN_TIMER=null}
-  if(!on)return;
-  SCAN_TIMER=setInterval(()=>scanMachine(true),SCAN_EVERY);
-  scanMachine(true);
-}
-
-function restoreAutoScan(){
-  let on=false;
-  try{on=localStorage.getItem("atif-view.autoscan")==="1"}catch(e){}
-  const box=document.getElementById("autoscan");
-  if(box)box.checked=on;
-  if(on&&!SCAN_TIMER)setAutoScan(true);
-}
-
-/* `quiet` marks a scan nobody pressed a button for. */
-async function scanMachine(quiet){
-  const said=document.getElementById("scanstate");
-  const go=document.getElementById("scango");
+/* Looking on this machine is a deliberate act: it indexes every agent session
+   here, which is not a thing to do because a library happens to be empty. It
+   lives on the Local folder as a refresh, beside the one remote folders get. */
+async function scanMachine(){
   const before=INDEX.length;
-  if(go)go.disabled=true;
-  if(said&&!quiet)said.textContent="Looking…";
+  note("Looking on this machine…");
   try{
-    const {total}=await postJSON("/api/scan",{});
-    await refreshIndex(quiet);
+    await postJSON("/api/scan",{});
+    await refreshIndex();
+    if(!cur)showLibrary();
     const added=INDEX.length-before;
-    // A watching scan must not move the reader: they may be mid-transcript, and
-    // a minute later is not a moment they chose. Only a press, or something new
-    // to show, redraws.
-    if(added&&!cur)showLibrary();
-    if(added&&quiet)note(`${num(added)} new session${added===1?"":"s"}.`);
-    if(said)said.textContent=added
-      ?`Found ${num(added)} new — ${num(total)} in the library.`
-      :quiet?`Watching · ${num(total)} in the library.`
-      :`Nothing new — ${num(total)} in the library.`;
-  }catch(e){
-    if(said)said.textContent=e.message;
-  }finally{
-    if(go)go.disabled=false;
-  }
+    note(added?`${num(added)} new session${added===1?"":"s"}.`:"Nothing new here.");
+  }catch(e){note(e.message)}
 }
 const closeUrl=()=>{urlmodal.hidden=true;PLANNED=null};
 const openUrl=openAdd;   // the drop overlay and the empty state both point here
@@ -1584,14 +1544,12 @@ async function annotate(key,fields){
   await refreshIndex();
 }
 
-/* `quietly` reloads the data without redrawing the table — for a scan nobody
-   pressed a button for, which must not reshuffle what someone is reading. */
-async function refreshIndex(quietly){
+async function refreshIndex(){
   const d=await fetch("/api/index").then(r=>r.json());
   INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";
   drawList();
-  if(!cur&&!quietly)showLibrary();
+  if(!cur)showLibrary();
 }
 
 const startEdit=(key,field)=>{
@@ -2186,12 +2144,22 @@ def _group(entry, source: str) -> str:
     return f"Local/{agent}/{project or 'Elsewhere'}"
 
 
-def _source_of(entry, home: Path, web: str) -> str:
-    """The page a fetched session was taken from, folder and all."""
+def _source_of(entry, home: Path, web: str, unpacked: dict | None = None) -> str:
+    """Where a fetched session came from, folder and all.
+
+    A file that arrived inside an archive is placed by the archive, not by the
+    directories the archive happens to contain: a zip whose insides are called
+    "transcripts/transcripts" should not read that way in the tree.
+    """
     if not web:
         return ""
+    here = Path(entry.path).parent
+    for root, came_from in (unpacked or {}).items():
+        if here == root or root in here.parents:
+            here = came_from
+            break
     try:
-        inner = Path(entry.path).parent.relative_to(home).as_posix()
+        inner = here.relative_to(home).as_posix()
     except ValueError:
         inner = ""
     return web if inner in (".", "") else f"{web}/{inner}"
@@ -2641,6 +2609,26 @@ class _Handler(BaseHTTPRequestHandler):
                 yield {"t": "error", "error": f"could not store: {exc.strerror}"}
                 return
 
+            # An archive is a container of transcripts, not a transcript, and a
+            # bucket of agent runs is mostly zips. Unpack on arrival so a fetch
+            # and a dropped archive end up in the same state.
+            # Where each unpacked tree came from, so what is inside an archive is
+            # placed by the archive's own location rather than by the folder
+            # names the archive happens to use internally.
+            unpacked_from: dict[Path, Path] = {}
+            for item in sorted(home.rglob("*")):
+                if not item.is_file() or not is_archive(item):
+                    continue
+                try:
+                    unpacked = extract(item)
+                except (ValueError, OSError):
+                    continue
+                beside = item.with_suffix("")
+                beside.mkdir(parents=True, exist_ok=True)
+                for inner in unpacked.iterdir():
+                    shutil.move(str(inner), beside / inner.name)
+                unpacked_from[beside] = item.parent
+
             # The same path an uploaded file takes, so a URL and a drop cannot
             # disagree about what counts as openable.
             try:
@@ -2661,7 +2649,7 @@ class _Handler(BaseHTTPRequestHandler):
             for entry in found:
                 library.update(
                     entry.key,
-                    source=_source_of(entry, home, plan.web),
+                    source=_source_of(entry, home, plan.web, unpacked_from),
                     into=str(into),
                 )
             yield {"t": "added", "added": len(found), "into": str(home)}

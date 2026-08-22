@@ -53,9 +53,13 @@ HOSTS = {
     "raw.githubusercontent.com": "github",
 }
 
-# What atif-make can convert. Matches corpus.scan so a URL and a directory
-# behave the same.
-SUFFIXES = (".jsonl", ".json", ".har")
+# What is worth fetching. Logs and trajectories, and the archives they arrive
+# in: a bucket of agent transcripts is far more likely to hold one zip per
+# session than loose JSONL, so excluding archives made S3 useless for exactly
+# the case it was added for.
+LOGS = (".jsonl", ".json", ".har")
+ARCHIVES = (".zip", ".tgz", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".gz")
+SUFFIXES = LOGS + ARCHIVES
 
 # Downloads land beside where the viewer was launched, so they are visible and
 # usable by other tools rather than buried in a dot-directory.
@@ -231,7 +235,10 @@ def _s3_plan(url: str, profile: str) -> tuple[str, list[Remote], str]:
     if not S3_PREFIX.match(prefix):
         raise FetchError("That key prefix has characters this will not pass to the CLI.")
 
-    args = ["s3api", "list-objects-v2", "--bucket", bucket]
+    # Capped rather than exhaustive: a bucket can hold six figures of objects,
+    # and pulling the whole listing to then refuse it wastes everyone's time.
+    args = ["s3api", "list-objects-v2", "--bucket", bucket,
+            "--max-items", str(MAX_FILES + 1)]
     if prefix:
         args += ["--prefix", prefix]
     listing = json.loads(_aws(args, profile) or "{}")
@@ -390,13 +397,14 @@ def _sized(plan: "Plan") -> "Plan":
     if not plan.files:
         raise FetchError(
             "Nothing convertible there — looking for "
-            + ", ".join(SUFFIXES)
-            + " files."
+            + ", ".join(LOGS)
+            + " files, or an archive of them."
         )
     if len(plan.files) > MAX_FILES:
+        where = "a prefix" if plan.service == "s3" else "a subdirectory"
         raise FetchError(
-            f"{len(plan.files):,} files is more than this fetches at once "
-            f"(limit {MAX_FILES:,}). Point at a subdirectory."
+            f"{len(plan.files):,}+ files is more than this fetches at once "
+            f"(limit {MAX_FILES:,}). Point at {where}."
         )
     known = sum(f.size or 0 for f in plan.files)
     if known > MAX_TOTAL_BYTES:
@@ -425,7 +433,7 @@ def plan(url: str, tokens: dict[str, str | None]) -> Plan:
         if not name.endswith(SUFFIXES):
             raise FetchError(
                 f"{name} is not a kind this reads — looking for "
-                f"{', '.join(SUFFIXES)}."
+                f"{', '.join(LOGS)} or an archive of them."
             )
         label, files, web = urlparse(url).hostname or "download", [
             Remote(name=name, url=url)

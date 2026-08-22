@@ -19,16 +19,14 @@ atif-view bundle.zip             # a bundle someone sent you
 atif-view --port 8080 --no-open
 ```
 
-**Add…** in the top bar is the only way in, and it offers three:
+Nothing appears on a first run. Sessions arrive two ways:
 
-- **From this machine** — finds sessions Claude Code, Codex and Copilot have
-  already written here. This is a deliberate act, never automatic: a first run
-  opens empty rather than indexing someone's entire history of every agent
-  because the library happened to be empty.
-- **A file or folder** — a log, a converted trajectory, a HAR, or an archive of
-  them. Dragging onto the window does the same.
-- **From a URL** — a Hugging Face dataset or GitHub repository, whole or one
-  folder inside it, or a direct link to a single file on any host.
+- **⟳ on the Local folder** finds what Claude Code, Codex and Copilot have
+  already written here. Deliberate rather than automatic: a first run should not
+  index someone's entire history of every agent because a library happened to be
+  empty. It is the same refresh remote folders get, in the same place.
+- **Add…** in the top bar brings things in from elsewhere — a file, a folder or
+  an archive from this machine, or a URL.
 
 Nothing downloads on the first press. It lists what is there — how many files,
 how large, and where they will land — and downloads only when pressed again,
@@ -57,7 +55,10 @@ are understood well enough to list a repository; every other host is a link to
 one file.
 
 `s3://bucket/prefix` works too, read through the **aws CLI** rather than a
-library. That is deliberate: the CLI already owns the SSO session, the profile
+library. Archives are fetched as readily as loose logs and unpacked on arrival,
+because a bucket of agent runs is far more likely to hold one zip per session
+than bare JSONL — and what comes out of an archive is placed in the tree by
+where the archive came from, not by whatever the archive calls its own folders. That is deliberate: the CLI already owns the SSO session, the profile
 configuration and the refresh logic, so shelling out to it means this never
 holds an AWS credential and never has to renew one. Sign in yourself —
 

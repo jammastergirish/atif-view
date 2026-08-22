@@ -556,3 +556,43 @@ def test_an_empty_bucket_says_nothing_convertible(monkeypatch):
     _aws_stub(monkeypatch, stdout=json.dumps({"Contents": []}))
     with pytest.raises(fetch.FetchError, match="Nothing convertible"):
         fetch.plan("s3://rr-agent-transcripts/runs", {})
+
+
+def test_an_archive_counts_as_something_worth_fetching(monkeypatch):
+    """A bucket of agent runs is mostly zips, one per session."""
+    _aws_stub(monkeypatch, stdout=json.dumps({
+        "Contents": [
+            {"Key": "chippy/abc/transcripts.zip", "Size": 11692},
+            {"Key": "chippy/abc/notes.md", "Size": 12},
+        ]
+    }))
+    plan = fetch.plan("s3://rr-agent-transcripts/chippy/abc", {"aws": "rw-eng"})
+    assert [f.name for f in plan.files] == ["transcripts.zip"]
+
+
+def test_the_listing_is_capped_rather_than_exhaustive(monkeypatch):
+    """A bucket can hold six figures of objects; pulling them all to refuse
+    them wastes everyone's time."""
+    seen = _aws_stub(monkeypatch, stdout=json.dumps({"Contents": []}))
+    with pytest.raises(fetch.FetchError):
+        fetch.plan("s3://rr-agent-transcripts", {})
+    assert "--max-items" in seen["command"]
+    assert seen["command"][seen["command"].index("--max-items") + 1] == str(
+        fetch.MAX_FILES + 1
+    )
+
+
+def test_too_many_objects_suggests_a_prefix(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({
+        "Contents": [{"Key": f"a/{i}.zip", "Size": 1} for i in range(fetch.MAX_FILES + 1)]
+    }))
+    with pytest.raises(fetch.FetchError, match="Point at a prefix"):
+        fetch.plan("s3://rr-agent-transcripts", {})
+
+
+def test_a_web_repository_is_told_to_use_a_subdirectory_instead(monkeypatch):
+    _stub(monkeypatch, {"api/datasets": [
+        {"type": "file", "path": f"{i}.jsonl"} for i in range(fetch.MAX_FILES + 1)
+    ]})
+    with pytest.raises(fetch.FetchError, match="Point at a subdirectory"):
+        fetch.plan("https://huggingface.co/datasets/owner/name", {})

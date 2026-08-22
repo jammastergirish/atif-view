@@ -804,82 +804,6 @@ test("a finished download refreshes the index before anything else can fail", as
   assert.strictEqual(fields.urlerr.hidden, true, "a working download showed an error");
 });
 
-test("watching is remembered, and off by default", () => {
-  const store = {};
-  const box = { checked: false };
-  run(`
-    globalThis.localStorage={getItem:k=>globalThis.__store[k]||null,
-      setItem:(k,v)=>{globalThis.__store[k]=v}};
-    document.getElementById=id=>id==="autoscan"?globalThis.__box:null;
-    restoreAutoScan();`, (globalThis.__store = store), (globalThis.__box = box));
-  assert.strictEqual(box.checked, false, "watching started without being asked for");
-});
-
-test("turning watching on records it and looks straight away", () => {
-  const store = {};
-  const calls = [];
-  run(`
-    globalThis.localStorage={getItem:k=>globalThis.__store[k]||null,
-      setItem:(k,v)=>{globalThis.__store[k]=v}};
-    globalThis.setInterval=()=>1;
-    globalThis.__calls.length=0;          // the page script boots on every eval
-    scanMachine=(quiet)=>{globalThis.__calls.push(quiet)};
-    setAutoScan(true);`, (globalThis.__store = store), (globalThis.__calls = calls));
-  assert.strictEqual(store["atif-view.autoscan"], "1");
-  assert.deepStrictEqual(calls, [true], "the first look should be a quiet one");
-});
-
-test("turning watching off stops the timer", () => {
-  const cleared = [];
-  run(`
-    globalThis.localStorage={getItem:()=>null,setItem:()=>{}};
-    globalThis.setInterval=()=>42;
-    globalThis.clearInterval=id=>{globalThis.__cleared.push(id)};
-    scanMachine=()=>{};
-    setAutoScan(true);
-    setAutoScan(false);`, (globalThis.__cleared = cleared));
-  assert.deepStrictEqual(cleared, [42], "the interval was left running");
-});
-
-test("a watching scan that finds nothing leaves the reader where they are", async () => {
-  const drawn = [];
-  await run(`
-    globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
-      ?{found:0,total:3}
-      :{sessions:[{key:"a"},{key:"b"},{key:"c"}],groups:[],tags:[],ai:{}}});
-    document.getElementById=()=>null;
-    // The page script boots on every eval and settles over several turns, and
-    // its own load sets INDEX. Wait for that, then set the scene.
-    return new Promise(done=>setTimeout(done,0)).then(()=>{
-      INDEX=[{key:"a"},{key:"b"},{key:"c"}];
-      cur=null;
-      globalThis.__drawn.length=0;
-      showLibrary=()=>{globalThis.__drawn.push("redrew")};
-      return scanMachine(true);
-    });`, (globalThis.__drawn = drawn));
-  assert.deepStrictEqual(drawn, [], "a quiet scan redrew the page for no reason");
-});
-
-test("a watching scan that finds something says so", async () => {
-  const notes = [];
-  await run(`
-    globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
-      ?{found:2,total:5}
-      :{sessions:[{key:"a"},{key:"b"},{key:"c"},{key:"d"},{key:"e"}],
-        groups:[],tags:[],ai:{}}});
-    document.getElementById=()=>null;
-    return new Promise(done=>setTimeout(done,0)).then(()=>{
-      INDEX=[{key:"a"},{key:"b"},{key:"c"}];
-      cur=null;
-      globalThis.__notes.length=0;
-      showLibrary=()=>{};
-      note=m=>{globalThis.__notes.push(m)};
-      return scanMachine(true);
-    });`, (globalThis.__notes = notes));
-  assert.strictEqual(notes.length, 1);
-  assert.match(notes[0], /2 new sessions/);
-});
-
 test("collapsing a node hides everything beneath it, not just its children", () => {
   const rows = run(`
     GROUPS=["Remote","Remote/Hugging Face","Remote/Hugging Face/owner",
@@ -979,6 +903,86 @@ test("with nothing of ours, the warning says files simply stay", async () => {
     return clearLibrary();`);
   assert.match(asked[0], /Files stay where they are\./);
   assert.ok(!asked[0].includes("viewer made"));
+});
+
+test("looking on this machine reports what it found", async () => {
+  const notes = [];
+  globalThis.__notes = notes;
+  await run(`
+    document.getElementById=()=>null;
+    return new Promise(done=>setTimeout(done,0)).then(()=>{
+      INDEX=[{key:"a"}];
+      cur=null;
+      globalThis.__notes.length=0;
+      showLibrary=()=>{};
+      note=m=>{globalThis.__notes.push(m)};
+      globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
+        ?{found:2,total:3}
+        :{sessions:[{key:"a"},{key:"b"},{key:"c"}],groups:[],tags:[],ai:{}}});
+      return scanMachine();
+    });`);
+  assert.match(notes[0], /Looking on this machine/);
+  assert.match(notes[notes.length - 1], /2 new sessions/);
+});
+
+test("looking again when there is nothing new says so", async () => {
+  const notes = [];
+  globalThis.__notes = notes;
+  await run(`
+    document.getElementById=()=>null;
+    return new Promise(done=>setTimeout(done,0)).then(()=>{
+      INDEX=[{key:"a"}];
+      cur=null;
+      globalThis.__notes.length=0;
+      showLibrary=()=>{};
+      note=m=>{globalThis.__notes.push(m)};
+      globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
+        ?{found:0,total:1}
+        :{sessions:[{key:"a"}],groups:[],tags:[],ai:{}}});
+      return scanMachine();
+    });`);
+  assert.match(notes[notes.length - 1], /Nothing new here/);
+});
+
+test("Local is offered even when the library is empty", () => {
+  const rows = run(`
+    INDEX=[];GROUPS=[];EXPANDED={};
+    return visibleRails().map(r=>r.path);`);
+  assert.deepStrictEqual(rows, ["__all", "Local"]);
+});
+
+test("Local is not doubled once it has sessions", () => {
+  const rows = run(`
+    INDEX=[{key:"a",group:"Local/Claude Code/x"}];
+    GROUPS=["Local","Local/Claude Code","Local/Claude Code/x"];
+    EXPANDED={};
+    return visibleRails().map(r=>r.path);`);
+  assert.deepStrictEqual(rows, ["__all", "Local"]);
+});
+
+test("Local refreshes by looking again; a remote one by fetching again", () => {
+  const html = run(`
+    INDEX=[{key:"a",group:"Local"},{key:"b",group:"Remote/S3/bucket",source:"s3://bucket"}];
+    GROUPS=["Local","Remote","Remote/S3","Remote/S3/bucket"];
+    EXPANDED={"Remote":true,"Remote/S3":true};
+    const el={innerHTML:""};
+    list=el;tagbar={innerHTML:""};
+    drawList();
+    return el.innerHTML;`);
+  assert.match(html, /scanMachine\(\)/, "Local has no way to look again");
+  assert.match(html, /refreshGroup\(&#39;Remote\/S3\/bucket&#39;\)|refreshGroup\('Remote\/S3\/bucket'\)/);
+});
+
+test("an s3 source is shown but not linked, having no page to open", () => {
+  const html = run(`
+    INDEX=[{key:"b",group:"Remote/S3/bucket",source:"s3://bucket/runs"}];
+    GROUPS=["Remote","Remote/S3","Remote/S3/bucket"];
+    EXPANDED={"Remote":true,"Remote/S3":true};
+    const el={innerHTML:""};
+    list=el;tagbar={innerHTML:""};
+    drawList();
+    return el.innerHTML;`);
+  assert.ok(!html.includes('href="s3://'), "an s3 URI was made into a link");
 });
 
 // ---- runner --------------------------------------------------------------------
