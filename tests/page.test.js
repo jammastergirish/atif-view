@@ -756,6 +756,8 @@ test("a finished download refreshes the index before anything else can fail", as
     document.getElementById=id=>globalThis.__fields[id]||null;
     globalThis.fetch=async(url,opts)=>{
       globalThis.__calls.push(url);
+      if(url==="/api/browse")return {ok:true,json:async()=>({nodes:[
+        {name:"a.jsonl",path:"a.jsonl",kind:"file",size:2048}]})};
       if(url==="/api/fetch"){
         const body=JSON.parse(opts.body);
         if(!body.confirm)return {ok:true,json:async()=>({plan:true,label:"o--r",
@@ -777,7 +779,7 @@ test("a finished download refreshes the index before anything else can fail", as
     // run() wraps this in a plain arrow, so chain rather than await.
     return planUrl().then(()=>planUrl());`);
   assert.ok(calls.includes("/api/index"), "the index was never refreshed");
-  assert.strictEqual(calls.filter((c) => c === "/api/fetch").length, 2);
+  assert.strictEqual(calls.filter((c) => c === "/api/fetch").length, 1);
   assert.strictEqual(fields.urlerr.hidden, true, "a working download showed an error");
 });
 
@@ -975,11 +977,14 @@ test("a single file is confirmed, not browsed", async () => {
     globalThis.__calls.length=0;
     globalThis.fetch=async(url,opts)=>{
       globalThis.__calls.push(url);
+      if(url==="/api/browse")return {ok:false,status:400,
+        json:async()=>({error:"That is a single file, so there is nothing to look inside."})};
       return {ok:true,json:async()=>({plan:true,label:"example.com",count:1,
         bytes:2048,into:"/tmp/x",names:["a.jsonl"]})};
     };
     return planUrl();`);
-  assert.deepStrictEqual(calls, ["/api/fetch"], "a lone file should not be browsed");
+  // Browsing is tried first; a lone file has no inside, so it falls through.
+  assert.deepStrictEqual(calls, ["/api/browse", "/api/fetch"]);
   assert.match(fields.urlstate.textContent, /1 file/);
 });
 
@@ -1004,7 +1009,9 @@ test("more than one file opens a picker instead of asking for a number", async (
         into:"/tmp/x",names:[]})};
     };
     return planUrl();`);
-  assert.deepStrictEqual(calls, ["/api/fetch", "/api/browse"]);
+  // Somewhere with an inside is never weighed against the download limits
+  // first — that is what refused a 118,801-object bucket before the picker.
+  assert.deepStrictEqual(calls, ["/api/browse"]);
   assert.strictEqual(fields.tree.hidden, false, "the picker stayed hidden");
   assert.match(fields.tree.innerHTML, /chippy/);
   assert.match(fields.tree.innerHTML, /one\.jsonl/);
@@ -1012,7 +1019,9 @@ test("more than one file opens a picker instead of asking for a number", async (
 
 test("ticking a folder covers what is inside it", () => {
   const out = run(`
-    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set()};
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set(),sized:{},sizing:0};
+    globalThis.fetch=async()=>({ok:true,json:async()=>({files:0,bytes:0})});
+    document.getElementById=()=>null;
     pickNode("chippy");
     return [isPicked("chippy"),isPicked("chippy/abc/x.zip"),isPicked("other")];`);
   assert.deepStrictEqual(out, [true, true, false]);
@@ -1020,41 +1029,13 @@ test("ticking a folder covers what is inside it", () => {
 
 test("ticking a folder drops the redundant ticks inside it", () => {
   const out = run(`
-    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set()};
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set(),sized:{},sizing:0};
+    globalThis.fetch=async()=>({ok:true,json:async()=>({files:0,bytes:0})});
+    document.getElementById=()=>null;
     pickNode("chippy/abc");
     pickNode("chippy");
     return [...TREE.picked];`);
   assert.deepStrictEqual(out, ["chippy"], "a nested tick outlived its parent");
-});
-
-test("the total counts what has been listed", () => {
-  const out = run(`
-    TREE={url:"s3://b",open:{},nodes:{
-      "":[{name:"a",path:"a",kind:"folder",size:null}],
-      "a":[{name:"x.zip",path:"a/x.zip",kind:"file",size:1024},
-           {name:"y.zip",path:"a/y.zip",kind:"file",size:2048}]},
-      picked:new Set(["a"]),busy:new Set()};
-    return picked();`);
-  assert.deepStrictEqual(out, { files: 2, bytes: 3072, unknown: false });
-});
-
-test("an unopened folder is counted as more, not as nothing", () => {
-  const out = run(`
-    TREE={url:"s3://b",open:{},nodes:{
-      "":[{name:"a",path:"a",kind:"folder",size:null}]},
-      picked:new Set(["a"]),busy:new Set()};
-    return picked();`);
-  assert.strictEqual(out.unknown, true, "a folder nobody opened was counted as empty");
-  assert.strictEqual(out.files, 0);
-});
-
-test("a ticked file is counted from its parent listing", () => {
-  const out = run(`
-    TREE={url:"s3://b",open:{},nodes:{
-      "a":[{name:"x.zip",path:"a/x.zip",kind:"file",size:5000}]},
-      picked:new Set(["a/x.zip"]),busy:new Set()};
-    return picked();`);
-  assert.deepStrictEqual(out, { files: 1, bytes: 5000, unknown: false });
 });
 
 test("the profile is a chooser only when there is a choice", () => {
@@ -1066,6 +1047,127 @@ test("the profile is a chooser only when there is a choice", () => {
   assert.match(many, /<select/);
   assert.match(many, /value="b" selected/);
   assert.match(many, /pick the one to use/);
+});
+
+test("the examples fill the field and look straight away", async () => {
+  const calls = [];
+  globalThis.__calls = calls;
+  const fields = {
+    urlin: { value: "" }, urlerr: { hidden: true, textContent: "" },
+    urlstate: { textContent: "" }, urlgo: { textContent: "" },
+    tree: { hidden: true, innerHTML: "" },
+  };
+  globalThis.__fields = fields;
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.__calls.length=0;
+    globalThis.fetch=async(url)=>{
+      globalThis.__calls.push(url);
+      return {ok:true,json:async()=>({nodes:[]})};
+    };
+    return useExample(1);`);
+  assert.strictEqual(fields.urlin.value, "s3://rr-agent-transcripts");
+  assert.ok(calls.includes("/api/browse"), "it filled the field but did not look");
+});
+
+test("both examples are offered by name", () => {
+  const names = run(`return EXAMPLES.map(e=>e.name);`);
+  assert.deepStrictEqual(names, ["SLEIGHT-Bench", "Redwood agent transcripts"]);
+  const urls = run(`return EXAMPLES.map(e=>e.url);`);
+  assert.match(urls[0], /^https:\/\/huggingface\.co\/datasets\/sleightbench\//);
+  assert.match(urls[1], /^s3:\/\//);
+});
+
+test("a selection is measured rather than guessed at", async () => {
+  const asked = [];
+  globalThis.__asked = asked;
+  const fields = { urlstate: { textContent: "" }, urlgo: { textContent: "" },
+                   tree: { hidden: false, innerHTML: "" } };
+  globalThis.__fields = fields;
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.__asked.length=0;
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__asked.push(JSON.parse(opts.body));
+      return {ok:true,json:async()=>({files:180,bytes:3641000000,capped:false})};
+    };
+    TREE={url:"s3://b",open:{},nodes:{"":[]},picked:new Set(["chippy"]),
+          busy:new Set(),sized:{},sizing:0};
+    return measure();`);
+  assert.deepStrictEqual(asked, [{ url: "s3://b", paths: ["chippy"] }]);
+  assert.match(fields.urlstate.textContent, /180 files · 3\.4 GB/);
+  assert.match(fields.urlgo.textContent, /Download 180/);
+});
+
+test("a measured folder is not measured twice", async () => {
+  const asked = [];
+  globalThis.__asked = asked;
+  globalThis.__fields = { urlstate: { textContent: "" }, urlgo: { textContent: "" } };
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.__asked.length=0;
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__asked.push(1);
+      return {ok:true,json:async()=>({files:2,bytes:100,capped:false})};
+    };
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(["a"]),
+          busy:new Set(),sized:{},sizing:0};
+    return measure().then(()=>measure());`);
+  assert.strictEqual(asked.length, 1, "the same folder was listed twice");
+});
+
+test("a selection over the limit says so", async () => {
+  globalThis.__fields = { urlstate: { textContent: "" }, urlgo: { textContent: "" } };
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.fetch=async()=>({ok:true,
+      json:async()=>({files:2001,bytes:99,capped:true})});
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(["big"]),
+          busy:new Set(),sized:{},sizing:0};
+    return measure();`);
+  assert.match(globalThis.__fields.urlstate.textContent, /narrow it down/);
+});
+
+test("nothing ticked asks for a tick", () => {
+  globalThis.__fields = { urlstate: { textContent: "" }, urlgo: { textContent: "" } };
+  run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set(),
+          sized:{},sizing:0};
+    drawTotal();`);
+  assert.match(globalThis.__fields.urlstate.textContent, /Tick what you want/);
+});
+
+test("select all ticks the top level, select none clears it", () => {
+  const out = run(`
+    globalThis.fetch=async()=>({ok:true,json:async()=>({files:0,bytes:0})});
+    document.getElementById=()=>null;
+    TREE={url:"s3://b",open:{},nodes:{"":[
+      {name:"a",path:"a",kind:"folder",size:null},
+      {name:"b",path:"b",kind:"folder",size:null}]},
+      picked:new Set(),busy:new Set(),sized:{},sizing:0};
+    pickAll();
+    const all=[...TREE.picked];
+    pickNone();
+    return [all,[...TREE.picked]];`);
+  assert.deepStrictEqual(out, [["a", "b"], []]);
+});
+
+test("zero bytes reads as zero, not as one kilobyte", () => {
+  assert.strictEqual(run(`return bytes(0);`), "0 KB");
+  assert.strictEqual(run(`return bytes(10);`), "1 KB");
+});
+
+test("the examples are rendered, not printed as template source", () => {
+  const host = { innerHTML: "" };
+  globalThis.__host = host;
+  run(`
+    document.getElementById=id=>id==="egs"?globalThis.__host:null;
+    drawExamples();`);
+  assert.match(host.innerHTML, /SLEIGHT-Bench/);
+  assert.match(host.innerHTML, /Redwood agent transcripts/);
+  assert.match(host.innerHTML, /useExample\(0\)/);
+  assert.ok(!host.innerHTML.includes("${"), "a template expression reached the page");
 });
 
 // ---- runner --------------------------------------------------------------------

@@ -215,18 +215,29 @@ body.hide-side #main{padding-left:52px}
   border-radius:5px;padding:7px 16px;font:inherit;font-size:12.5px;cursor:pointer;
   margin:0 3px}
 .blank button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.egs{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap;
+  font:500 10.5px var(--font-mono);letter-spacing:.05em;color:var(--muted)}
+.egs button{border:1px solid var(--line);background:var(--surface);color:var(--muted);
+  border-radius:20px;padding:2px 10px;font:inherit;cursor:pointer}
+.egs button:hover{color:var(--accent);border-color:var(--accent)}
+.pkbar{display:flex;gap:12px;padding:5px 10px 7px;border-bottom:1px solid var(--line);
+  margin-bottom:4px;font:500 10.5px var(--font-mono);letter-spacing:.05em;
+  color:var(--muted)}
+.pkbar span{cursor:pointer}
+.pkbar span:hover{color:var(--accent)}
+.pkbar .pkexp{margin-left:auto}
 #tree{max-height:38vh;overflow:auto;border:1px solid var(--line);border-radius:7px;
   margin-top:9px;padding:5px 0;background:var(--surface)}
 #tree[hidden]{display:none}
-.tnode{display:flex;align-items:center;gap:6px;padding:2px 10px;font-size:12.5px}
+.pkrow{display:flex;align-items:center;gap:6px;padding:2px 10px;font-size:12.5px}
 .tnode:hover{background:var(--sunk)}
-.tnode input{accent-color:var(--accent);margin:0;flex:none}
-.tcar{width:10px;flex:none;color:var(--muted);font-size:9px;cursor:pointer;
+.pkrow input{margin:0}
+.pkcar{width:10px;flex:none;color:var(--muted);font-size:9px;cursor:pointer;
   transition:transform .12s;display:inline-block}
-.tcar.open{transform:rotate(90deg)}
-.tname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  cursor:default}
-.tsize{font:500 10px var(--font-mono);color:var(--muted);flex:none}
+.pkcar.open{transform:rotate(90deg)}
+.pkname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  cursor:default;font:12.5px var(--font-mono);color:var(--ink)}
+.pksize{font:500 10px var(--font-mono);color:var(--muted);flex:none}
 #urlbar{height:4px;border-radius:2px;background:var(--sunk);overflow:hidden;margin-top:11px}
 #urlbar[hidden]{display:none}
 #urlfill{height:100%;width:0;background:var(--accent);border-radius:2px;
@@ -236,9 +247,11 @@ body.hide-side #main{padding-left:52px}
 .sheet h2{font:600 15px var(--font-ui);margin:0 0 14px}
 .sheet label{display:block;font:600 9.5px var(--font-mono);letter-spacing:.11em;
   text-transform:uppercase;color:var(--muted);margin-bottom:5px}
-.sheet input{width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
+.sheet input:not([type=checkbox]){width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:5px;
   background:var(--surface);color:var(--ink);font:13px var(--font-mono)}
-.sheet input:focus{outline:none;border-color:var(--accent)}
+.sheet input:not([type=checkbox]):focus{outline:none;border-color:var(--accent)}
+.sheet input[type=checkbox]{width:13px;height:13px;padding:0;border:none;flex:none;
+  accent-color:var(--accent)}
 .sheet input::placeholder{color:var(--muted);opacity:1}
 .sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0;
   white-space:pre-line}
@@ -493,8 +506,10 @@ pre.json{line-height:1.45}
          whole, or one folder inside it — an <b>S3</b> bucket or prefix, or a direct
          link to a single file.</p>
       <p class="fine">S3 is read by running the <code>aws</code> CLI, so sign in with
-         <code>aws sso login --profile &lt;name&gt;</code> first and set that profile
-         in Settings.</p>
+         <code>aws sso login --profile &lt;name&gt;</code> first. The profile is worked
+         out from your setup; only a machine with several needs one chosen, in
+         Settings.</p>
+      <div class="egs" id="egs"></div>
       <input id="urlin" spellcheck="false" autocomplete="off"
              placeholder="https://huggingface.co/… · https://github.com/… · s3://bucket/prefix"
              onkeydown="if(event.key==='Enter')planUrl()">
@@ -830,7 +845,8 @@ function pre(content) {
 
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num=n=>(n??0).toLocaleString();
-const bytes=n=>n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
+const bytes=n=>!n?"0 KB"
+  :n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
   :n>=1024**2?`${(n/1024**2).toFixed(1)} MB`
   :`${Math.max(1,Math.round(n/1024))} KB`;
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
@@ -1323,9 +1339,32 @@ const clearSecret=name=>settings({name,clear:true});
    files, and nobody should find that out by pressing a button once. */
 let PLANNED=null;
 
+const EXAMPLES=[
+  {name:"SLEIGHT-Bench",
+   url:"https://huggingface.co/datasets/sleightbench/SLEIGHT-Bench/tree/main/attacks"},
+  {name:"Redwood agent transcripts", url:"s3://rr-agent-transcripts"},
+];
+
+function drawExamples(){
+  const host=document.getElementById("egs");
+  if(!host)return;
+  host.innerHTML=`<span>Try:</span>`+EXAMPLES.map((e,i)=>
+    `<button onclick="useExample(${i})" title="${esc(e.url)}">${esc(e.name)}</button>`
+  ).join("");
+}
+
+function useExample(i){
+  const box=document.getElementById("urlin");
+  if(!box)return;
+  box.value=EXAMPLES[i].url;
+  PLANNED=null;
+  planUrl();
+}
+
 /* What a browsed location holds, filled in a level at a time, and what has been
    ticked. Paths are as the remote spells them, so they can go straight back. */
-let TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set()};
+let TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set(),
+  sized:{},sizing:0};
 
 const isPicked=path=>TREE.picked.has(path)
   ||[...TREE.picked].some(p=>path.startsWith(p+"/"));
@@ -1360,32 +1399,80 @@ function pickNode(path){
     TREE.picked.add(path);
   }
   drawTree();
+  measure();
 }
 
-/* Only what has been listed can be counted, so the total is honest about being
-   a floor when a ticked folder has not been opened. */
-function picked(){
-  let files=0,bytes=0,unknown=false;
-  const walk=path=>{
-    const nodes=TREE.nodes[path];
-    if(!nodes){unknown=true;return}
-    for(const n of nodes){
-      if(n.kind==="folder")walk(n.path);
-      else{files++;bytes+=n.size||0}
+/* Ask the server how much the selection actually is. A tick on a folder is a
+   promise about its contents, and "1+ files" is not an answer to "how much am I
+   getting?" — so it is listed rather than guessed. Cached per path, since a
+   folder's contents do not change while the dialog is open. */
+async function measure(){
+  const wanted=[...TREE.picked];
+  const missing=wanted.filter(p=>TREE.sized[p]===undefined);
+  if(!missing.length){drawTotal();return}
+  TREE.sizing++;
+  drawTotal();
+  try{
+    for(const path of missing){
+      const got=await postJSON("/api/measure",{url:TREE.url,paths:[path]});
+      TREE.sized[path]=got;
     }
-  };
-  for(const path of TREE.picked){
-    const nodes=TREE.nodes[path];
-    if(nodes===undefined){
-      const parent=path.split("/").slice(0,-1).join("/");
-      const known=(TREE.nodes[parent]||[]).find(n=>n.path===path);
-      if(known&&known.kind==="file"){files++;bytes+=known.size||0;continue}
-      unknown=true;
-      continue;
-    }
-    walk(path);
+  }catch(e){
+    for(const path of missing)TREE.sized[path]={files:0,bytes:0,error:true};
+  }finally{
+    TREE.sizing--;
+    drawTotal();
   }
-  return {files,bytes,unknown};
+}
+
+function total(){
+  let files=0,bytes=0,capped=false;
+  for(const path of TREE.picked){
+    const got=TREE.sized[path];
+    if(!got)continue;
+    files+=got.files;bytes+=got.bytes;capped=capped||!!got.capped;
+  }
+  return {files,bytes,capped};
+}
+
+function drawTotal(){
+  const {files,bytes:size,capped}=total();
+  const counting=TREE.sizing>0;
+  const label=files?`Download ${num(files)}`:"Download";
+  setUrlState(
+    !TREE.picked.size?"Tick what you want."
+      :counting?"Working out how much that is…"
+      :`${num(files)} file${files===1?"":"s"} · ${bytes(size)}${
+          capped?" (more than the limit — narrow it down)":""}`,
+    label);
+}
+
+/* Ticking a folder already covers everything under it — isPicked walks up the
+   path — so these only need to reach the top level. */
+const pickAll=()=>{
+  TREE.picked=new Set((TREE.nodes[""]||[]).map(n=>n.path));
+  drawTree();measure();
+};
+const pickNone=()=>{TREE.picked=new Set();drawTree();drawTotal()};
+
+/* Opening everything is one request per folder, so it is asked for rather than
+   assumed. The measured total does not need it — that is listed server-side —
+   but seeing the shape of a place sometimes does. */
+async function expandAll(){
+  for(let depth=0;depth<6;depth++){
+    const shut=[];
+    const walk=path=>{
+      for(const n of TREE.nodes[path]||[]){
+        if(n.kind!=="folder")continue;
+        if(TREE.nodes[n.path]===undefined)shut.push(n.path);
+        else walk(n.path);
+      }
+    };
+    walk("");
+    if(!shut.length)break;
+    for(const path of shut){TREE.open[path]=true;await openNode(path)}
+  }
+  drawTree();
 }
 
 function drawTree(){
@@ -1396,44 +1483,43 @@ function drawTree(){
     for(const n of TREE.nodes[path]||[]){
       const open=!!TREE.open[n.path];
       const on=isPicked(n.path);
-      rows.push(`<div class="tnode" style="padding-left:${depth*14}px">
+      rows.push(`<div class="pkrow" style="padding-left:${8+depth*14}px">
         <input type="checkbox" ${on?"checked":""}
           onchange="pickNode('${esc(n.path)}')">
         ${n.kind==="folder"
-          ?`<span class="tcar${open?" open":""}" onclick="toggleNode('${esc(n.path)}')">▸</span>`
-          :`<span class="tcar"></span>`}
-        <span class="tname" ${n.kind==="folder"
-          ?`onclick="toggleNode('${esc(n.path)}')"`:""}>${esc(n.name)}</span>
-        <span class="tsize">${n.size==null?"":bytes(n.size)}</span>
+          ?`<span class="pkcar${open?" open":""}" onclick="toggleNode('${esc(n.path)}')">▸</span>`
+          :`<span class="pkcar"></span>`}
+        <span class="pkname"${n.kind==="folder"
+          ?` onclick="toggleNode('${esc(n.path)}')"`:""}>${esc(n.name)}</span>
+        <span class="pksize">${n.size==null?"":bytes(n.size)}</span>
       </div>`);
       if(open)walk(n.path,depth+1);
     }
     if(TREE.busy.has(path))rows.push(
-      `<div class="tnode" style="padding-left:${depth*14}px"><span class="tcar"></span>
-        <span class="tname fine">looking…</span></div>`);
+      `<div class="pkrow" style="padding-left:${depth*14}px"><span class="pkcar"></span>
+        <span class="pkname fine">looking…</span></div>`);
   };
   walk("",0);
   host.hidden=false;
-  host.innerHTML=rows.join("")||`<div class="tnode fine">Nothing here.</div>`;
+  const top=(TREE.nodes[""]||[]).length;
+  host.innerHTML=(top?`<div class="pkbar">
+      <span onclick="pickAll()">All</span>
+      <span onclick="pickNone()">None</span>
+      <span class="pkexp" onclick="expandAll()">Open all</span>
+    </div>`:"")
+    +(rows.join("")||`<div class="pkrow fine">Nothing here.</div>`);
 
-  const {files,bytes:total,unknown}=picked();
-  const go=document.getElementById("urlgo");
-  if(go)go.textContent=files||unknown
-    ?`Download ${unknown&&!files?"selection":num(files)+(unknown?"+":"")}`
-    :"Download";
-  setUrlState(files||unknown
-    ?`${num(files)}${unknown?"+":""} file${files===1&&!unknown?"":"s"} · ${bytes(total)}${
-        unknown?" and more inside folders not yet opened":""}`
-    :"Tick what you want.","");
+  drawTotal();
 }
 
 function openAdd(){
   PLANNED=null;
   const err=document.getElementById("urlerr");
   if(err){err.hidden=true;err.textContent=""}
-  TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set()};
+  TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set(),sized:{},sizing:0};
   const tree=document.getElementById("tree");
   if(tree){tree.hidden=true;tree.innerHTML=""}
+  drawExamples();
   urlmodal.hidden=false;
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
@@ -1505,16 +1591,25 @@ async function planUrl(){
   }
 
   setUrlState("Looking…","Working");
+
+  // Browse first, not plan. Planning weighs the whole location against the
+  // download limits, so a bucket of 118,801 objects was refused before the
+  // picker — the thing that exists to make such a place usable — could open.
+  try{
+    TREE={url,open:{},nodes:{},picked:new Set(),busy:new Set(),sized:{},sizing:0};
+    const {nodes}=await postJSON("/api/browse",{url,path:""});
+    TREE.nodes[""]=nodes;
+    PLANNED=url;
+    drawTree();
+    return;
+  }catch(e){
+    // Not somewhere with an inside — a link to one file. Fall through.
+    TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set(),sized:{},sizing:0};
+  }
+
   try{
     const p=await postJSON("/api/fetch",{url});
     PLANNED=url;
-    if(p.count>1){
-      // More than one file means a choice, so show what is there rather than
-      // asking someone to agree to a number.
-      TREE={url,open:{},nodes:{},picked:new Set(),busy:new Set()};
-      await openNode("");
-      return;
-    }
     const size=p.bytes?` · ${bytes(p.bytes)}`:"";
     const sample=p.names.length?` — ${p.names.slice(0,3).join(", ")}${
       p.count>3?", …":""}`:"";
@@ -2529,6 +2624,23 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 400)
                 return
             self._json({"nodes": [n._asdict() for n in nodes]})
+            return
+
+        if url.path == "/api/measure":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            try:
+                self._json(
+                    fetch.measure(
+                        body.get("url") or "", body.get("paths") or [], config.tokens()
+                    )
+                )
+            except fetch.FetchError as exc:
+                self._json({"error": str(exc)}, 400)
             return
 
         if url.path == "/api/fetch":

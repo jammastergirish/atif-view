@@ -580,6 +580,80 @@ def _sized(plan: "Plan") -> "Plan":
     return plan
 
 
+def _under(name: str, wanted: set[str]) -> bool:
+    """Whether a file was ticked, directly or by one of its folders."""
+    name = name.strip("/")
+    return name in wanted or any(name.startswith(w + "/") for w in wanted)
+
+
+def _inner_base(url: str) -> str:
+    """The folder a repository URL already points at.
+
+    Browse paths are relative to that folder, while a plan names files relative
+    to the repository root — so one has to be rebased onto the other or a ticked
+    folder matches nothing. S3 needs none of this: both are relative to the
+    prefix.
+    """
+    if url.startswith("s3://"):
+        return ""
+    parsed = urlparse(url)
+    pattern = _HF if HOSTS.get(parsed.netloc) == "hf" else _GH
+    match = pattern.match(parsed.path)
+    return (match.group("path") or "").strip("/") if match else ""
+
+
+def _rebase(url: str, paths: list[str]) -> set[str]:
+    base = _inner_base(url)
+    return {
+        "/".join(p for p in (base, path.strip("/")) if p)
+        for path in paths
+        if path and path.strip("/")
+    }
+
+
+def measure(url: str, paths: list[str], tokens: dict[str, str | None]) -> dict:
+    """Exactly how much a selection is, by listing inside what was ticked.
+
+    A tick on a folder is a promise about its contents, and "1+ files" is not an
+    answer to "how much am I getting?". This costs one listing per folder, which
+    is the price of a real number.
+    """
+    wanted = {p.strip("/") for p in paths if p and p.strip("/")}
+    if not wanted:
+        return {"files": 0, "bytes": 0, "capped": False}
+
+    if url.startswith("s3://"):
+        profile = resolve_profile(tokens.get("aws") or "")
+        bucket, _, base = url[len("s3://") :].strip("/").partition("/")
+        if not S3_BUCKET.match(bucket):
+            raise FetchError(f"{bucket!r} is not a valid S3 bucket name.")
+        files = bytes_ = 0
+        capped = False
+        for path in sorted(wanted):
+            prefix = "/".join(p for p in (base, path) if p)
+            if not S3_PREFIX.match(prefix):
+                raise FetchError("That prefix has characters this will not pass on.")
+            args = ["s3api", "list-objects-v2", "--bucket", bucket,
+                    "--max-items", str(MAX_FILES + 1)]
+            if prefix:
+                args += ["--prefix", prefix]
+            rows = json.loads(_aws(args, profile) or "{}").get("Contents", [])
+            keep = [r for r in rows if str(r.get("Key", "")).endswith(SUFFIXES)]
+            files += len(keep)
+            bytes_ += sum(r.get("Size") or 0 for r in keep)
+            capped = capped or len(rows) > MAX_FILES
+        return {"files": files, "bytes": bytes_, "capped": capped}
+
+    whole = plan(url, tokens, sized=False)
+    against = _rebase(url, list(wanted))
+    keep = [f for f in whole.files if _under(f.name, against)]
+    return {
+        "files": len(keep),
+        "bytes": sum(f.size or 0 for f in keep),
+        "capped": False,
+    }
+
+
 def select(url: str, paths: list[str], tokens: dict[str, str | None]) -> Plan:
     """A plan covering only what was ticked.
 
@@ -587,17 +661,11 @@ def select(url: str, paths: list[str], tokens: dict[str, str | None]) -> Plan:
     rather than in the page: the page would have to walk the remote to find out
     what it had just agreed to, which is the work this avoids.
     """
-    whole = plan(url, tokens, sized=False)
-    wanted = {p.strip("/") for p in paths if p and p.strip("/")}
-    if not wanted:
+    if not [p for p in paths if p and p.strip("/")]:
         raise FetchError("Nothing was ticked.")
-
-    chosen = [
-        f
-        for f in whole.files
-        if f.name.strip("/") in wanted
-        or any(f.name.strip("/").startswith(w + "/") for w in wanted)
-    ]
+    whole = plan(url, tokens, sized=False)
+    wanted = _rebase(url, paths)
+    chosen = [f for f in whole.files if _under(f.name, wanted)]
     return _sized(Plan(whole.service, whole.label, chosen, whole.web))
 
 

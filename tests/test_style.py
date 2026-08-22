@@ -74,3 +74,28 @@ def test_colours_outside_the_themes_come_from_tokens():
     without_themes = re.sub(r":root[^{]*\{[^}]*\}", "", STYLE)
     literals = re.findall(r":\s*(#[0-9a-fA-F]{3,8})\b", without_themes)
     assert not literals, f"hard-coded colours defeat the themes: {sorted(set(literals))}"
+
+
+def test_a_checkbox_is_not_styled_as_a_text_field():
+    """`.sheet input {width:100%}` caught checkboxes and swallowed whole rows."""
+    for match in re.finditer(r"^\.sheet input([^{]*)\{([^}]*)\}", STYLE, re.MULTILINE):
+        qualifier, body = match.group(1), match.group(2)
+        if "checkbox" in qualifier:
+            continue
+        assert "not([type=checkbox])" in qualifier or "width:100%" not in body, (
+            f".sheet input{qualifier} sets width on every input, checkboxes included"
+        )
+
+
+def test_the_picker_rows_lay_out_left_to_right():
+    assert re.search(r"^\.pkrow\{[^}]*display:flex", STYLE, re.MULTILINE)
+    assert re.search(r"^\.pkname\{[^}]*flex:1", STYLE, re.MULTILINE)
+
+
+def test_no_template_expression_is_left_in_the_static_markup():
+    """The modal's HTML is not a template literal: a ${…} there renders as text,
+    which is how the examples row shipped showing its own source."""
+    from atif_view.viewer import PAGE
+
+    markup = PAGE[: PAGE.index("<script>")]
+    assert "${" not in markup, "a JS template expression is sitting in static HTML"

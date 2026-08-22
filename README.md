@@ -34,8 +34,12 @@ time, with sizes and checkboxes — so what gets downloaded is chosen rather tha
 accepted. Folders open as they are clicked rather than up front: the bucket this
 was built against holds 118,801 objects, and listing all of them to draw a tree
 would cost more than most of the downloads it exists to avoid. Ticking a folder
-takes everything under it, and the running total says how much that is, marking
-itself as a floor while a ticked folder is still unopened. The index is refreshed before anything
+takes everything under it, and the total is measured rather than estimated: the
+server lists inside what was ticked and answers with a real count and size, so
+"180 files · 3.4 GB" is what it says, not "1+ files". **All** and **None** tick
+the top level; **Open all** expands the tree when the shape of a place matters.
+
+A couple of **examples** sit above the field and fill it in. The index is refreshed before anything
 cosmetic happens, so a failure after the download cannot cost you the rows you
 just paid for.
 

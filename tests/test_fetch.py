@@ -450,7 +450,24 @@ def _aws_stub(monkeypatch, stdout="", code=0, stderr=""):
         seen["command"] = command
         seen["shell"] = kwargs.get("shell", False)
         done = Done()
-        done.stdout, done.stderr = stdout, stderr
+        done.stderr = stderr
+        # Honour --prefix like the real thing, so a test that depends on the
+        # prefix being sent actually depends on it.
+        body = stdout
+        if stdout and "--prefix" in command:
+            prefix = command[command.index("--prefix") + 1]
+            try:
+                data = json.loads(stdout)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict) and "Contents" in data:
+                data = dict(data)
+                data["Contents"] = [
+                    row for row in data["Contents"]
+                    if str(row.get("Key", "")).startswith(prefix)
+                ]
+                body = json.dumps(data)
+        done.stdout = body
         return done
 
     monkeypatch.setattr(fetch.shutil, "which", lambda name: "/usr/bin/aws")
@@ -704,3 +721,62 @@ def test_a_prefix_name_cannot_be_smuggled_past_the_pattern(monkeypatch):
     _aws_stub(monkeypatch, stdout=json.dumps({"Contents": []}))
     with pytest.raises(fetch.FetchError, match="will not pass to the CLI"):
         fetch.browse("s3://bucket", "a$(whoami)", {})
+
+
+# ---- browse paths and plan names have to meet --------------------------------------
+
+
+def test_a_ticked_folder_in_a_repo_subdirectory_matches(monkeypatch):
+    """Browse paths are relative to the URL's folder; a plan names files from the
+    repository root. Without rebasing, ticking a folder matched nothing at all."""
+    _stub(monkeypatch, {"api/datasets": [
+        {"type": "file", "path": "attacks/model_priors/a/transcript.jsonl", "size": 10},
+        {"type": "file", "path": "attacks/model_priors/b/transcript.jsonl", "size": 20},
+        {"type": "file", "path": "attacks/counting/c/transcript.jsonl", "size": 40},
+    ]})
+    url = "https://huggingface.co/datasets/o/n/tree/main/attacks"
+    got = fetch.measure(url, ["model_priors"], {})
+    assert got == {"files": 2, "bytes": 30, "capped": False}
+
+
+def test_the_same_rebasing_applies_when_downloading(monkeypatch):
+    _stub(monkeypatch, {"api/datasets": [
+        {"type": "file", "path": "attacks/model_priors/a/transcript.jsonl", "size": 10},
+        {"type": "file", "path": "attacks/counting/c/transcript.jsonl", "size": 40},
+    ]})
+    url = "https://huggingface.co/datasets/o/n/tree/main/attacks"
+    plan = fetch.select(url, ["model_priors"], {})
+    assert [f.name for f in plan.files] == ["attacks/model_priors/a/transcript.jsonl"]
+
+
+def test_a_repository_root_needs_no_rebasing(monkeypatch):
+    _stub(monkeypatch, {"api/datasets": [
+        {"type": "file", "path": "logs/a.jsonl", "size": 1},
+        {"type": "file", "path": "other/b.jsonl", "size": 2},
+    ]})
+    got = fetch.measure("https://huggingface.co/datasets/o/n", ["logs"], {})
+    assert got["files"] == 1
+
+
+def test_s3_paths_need_no_rebasing(monkeypatch):
+    """Both sides are already relative to the prefix."""
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [
+        {"Key": "chippy/abc/one.zip", "Size": 5},
+        {"Key": "chippy/def/two.zip", "Size": 7},
+    ]}))
+    got = fetch.measure("s3://bucket/chippy", ["abc"], {"aws": "rw-eng"})
+    assert got["files"] == 1 and got["bytes"] == 5
+
+
+def test_measuring_nothing_is_nothing():
+    assert fetch.measure("s3://bucket", [], {}) == {
+        "files": 0, "bytes": 0, "capped": False,
+    }
+
+
+def test_a_measurement_over_the_limit_says_so(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [
+        {"Key": f"a/{i}.zip", "Size": 1} for i in range(fetch.MAX_FILES + 1)
+    ]}))
+    got = fetch.measure("s3://bucket", ["a"], {})
+    assert got["capped"] is True
