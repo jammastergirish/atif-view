@@ -15,7 +15,7 @@ from atif_view.viewer import PAGE
 STYLE = PAGE[PAGE.index("<style>") + 7 : PAGE.index("</style>")]
 
 
-HEADER_CONTROLS = ("#theme", "#gear", "#open", "#fromurl")
+HEADER_CONTROLS = ("#theme", "#gear", "#open")
 
 
 def test_the_header_controls_share_one_rule():

@@ -65,8 +65,21 @@ def test_a_path_with_nothing_convertible_reports_rather_than_serving(
 ):
     (tmp_path / "notes.txt").write_text("nothing here")
     assert cli.main([str(tmp_path)]) == 1
-    assert "nothing to view" in capsys.readouterr().err
+    assert "nothing convertible" in capsys.readouterr().err
     assert not served
+
+
+def test_an_empty_library_opens_empty_rather_than_scanning(served, tmp_path, monkeypatch):
+    """Scanning because the library is empty indexes a whole machine unasked."""
+    from atif_make import corpus
+
+    monkeypatch.setattr(corpus, "INDEX_PATH", tmp_path / "absent.json")
+    def refuse(*a, **k):
+        raise AssertionError("a first run scanned the machine")
+    monkeypatch.setattr(corpus, "scan", refuse)
+
+    assert cli.main([]) == 0
+    assert served["entries"] == []
 
 
 def test_no_argument_falls_back_to_the_index(served, tmp_path, monkeypatch):

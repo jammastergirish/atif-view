@@ -2,11 +2,15 @@
 
 Two rules shape this module.
 
-**Hosts are allowlisted.** The page hands a URL to a server running as you, on
-your network, so an unrestricted fetcher would let a web page reach your router,
-a cloud metadata endpoint, or a service bound to localhost. Only the four hosts
-below are reachable, only over HTTPS, and a redirect off them is refused rather
-than followed.
+**Private address space is unreachable.** The page hands a URL to a server
+running as you, on your network, so an unguarded fetcher would let it reach your
+router, a cloud metadata endpoint, or a service bound to localhost. Any URL is
+allowed, but the host is resolved first and refused if it lands on a loopback,
+link-local, private or otherwise reserved address — checked again after
+redirects, since a redirect is a second request to a second host.
+
+Hugging Face and GitHub are understood well enough to list a repository; every
+other host is treated as a direct link to one file.
 
 **Nothing is downloaded without being listed first.** A dataset URL can name
 hundreds of files; `plan()` says what would be fetched and how much it weighs,
@@ -19,6 +23,8 @@ from __future__ import annotations
 
 import json
 import re
+import ipaddress
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -27,7 +33,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-# Only these, and only over https.
+# Hosts whose layout is understood well enough to list a repository. Anything
+# else is fetched as a single file.
 HOSTS = {
     "huggingface.co": "hf",
     "cdn-lfs.huggingface.co": "hf",
@@ -70,16 +77,41 @@ class Remote:
 
 
 def _check_host(url: str) -> str:
+    """Refuse anything that resolves into private address space.
+
+    An allowlist was simpler but ruled out every other host; this is the usual
+    mitigation and lets a bare link work. It resolves the name and inspects the
+    addresses rather than pattern-matching the text, so `127.0.0.1`,
+    `localhost`, `0x7f.1`, and a public name pointed at a private address are
+    all caught the same way.
+    """
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise FetchError("Only https URLs are fetched.")
-    service = HOSTS.get(parsed.netloc)
-    if service is None:
-        raise FetchError(
-            f"{parsed.netloc or 'that host'} is not fetched. "
-            f"Only {', '.join(sorted(HOSTS))} are."
-        )
-    return service
+
+    host = parsed.hostname
+    if not host:
+        raise FetchError("That URL has no host.")
+
+    try:
+        addresses = {
+            info[4][0] for info in socket.getaddrinfo(host, parsed.port or 443)
+        }
+    except socket.gaierror as exc:
+        raise FetchError(f"Could not look up {host}.") from exc
+
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not ip.is_global or ip.is_multicast:
+            raise FetchError(
+                f"{host} resolves to {ip}, which is on this machine or this "
+                f"network. Only public addresses are fetched."
+            )
+
+    return HOSTS.get(parsed.netloc, "direct")
 
 
 def _open(url: str, token: str | None, service: str) -> Any:
@@ -247,7 +279,16 @@ def plan(url: str, tokens: dict[str, str | None]) -> tuple[str, str, list[Remote
     service = _check_host(url)
     token = tokens.get(service)
 
-    label, files = (_hf_plan if service == "hf" else _github_plan)(url, token)
+    if service == "direct":
+        name = Path(urlparse(url).path).name or "download.jsonl"
+        if not name.endswith(SUFFIXES):
+            raise FetchError(
+                f"{name} is not a kind this reads — looking for "
+                f"{', '.join(SUFFIXES)}."
+            )
+        label, files = urlparse(url).hostname or "download", [Remote(name=name, url=url)]
+    else:
+        label, files = (_hf_plan if service == "hf" else _github_plan)(url, token)
     if not files:
         raise FetchError(
             "Nothing convertible there — looking for .jsonl, .json or .har files."

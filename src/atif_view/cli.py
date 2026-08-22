@@ -35,12 +35,16 @@ def cmd_view(args: argparse.Namespace) -> int:
             if path.is_dir() or is_archive(path)
             else _single_entry(path)
         )
+        # An explicit path that holds nothing is a mistake worth reporting; an
+        # empty library is not, so this only guards the argument.
+        if not entries:
+            print(f"atif-view: nothing convertible in {path}", file=sys.stderr)
+            return 1
     else:
-        entries = corpus.load() or corpus.scan()
-
-    if not entries:
-        print("atif-view: nothing to view (try `atif-make index` first)", file=sys.stderr)
-        return 1
+        # Only what has been added deliberately. Scanning a machine because the
+        # library happens to be empty indexes someone's whole history of every
+        # agent without being asked; the viewer opens empty and offers to.
+        entries = corpus.load()
     serve(
         entries,
         port=args.port or 7433,

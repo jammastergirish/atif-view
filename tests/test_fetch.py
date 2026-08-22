@@ -51,47 +51,70 @@ def _stub(monkeypatch, routes: dict, landed: str | None = None):
     return seen
 
 
-# ---- the allowlist ---------------------------------------------------------------
+# ---- what may be reached ---------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def dns(monkeypatch):
+    """Resolve names without touching the network.
+
+    Anything not named here resolves to a public address, so a test that cares
+    about address space says so explicitly.
+    """
+    table = {
+        "localhost": "127.0.0.1",
+        "127.0.0.1": "127.0.0.1",
+        "169.254.169.254": "169.254.169.254",
+        "192.168.1.1": "192.168.1.1",
+        "10.0.0.5": "10.0.0.5",
+        "internal.example": "172.16.4.4",
+        "nowhere.example": None,
+    }
+
+    def resolve(host, port, *args, **kwargs):
+        address = table.get(host, "93.184.216.34")
+        if address is None:
+            raise fetch.socket.gaierror("no such host")
+        return [(2, 1, 6, "", (address, port or 443))]
+
+    monkeypatch.setattr(fetch.socket, "getaddrinfo", resolve)
 
 
 @pytest.mark.parametrize(
     "url",
     [
-        "https://evil.example.com/x.jsonl",
-        "https://169.254.169.254/latest/meta-data/",
-        "https://127.0.0.1:8080/admin",
-        "https://localhost/secrets.json",
-        "https://huggingface.co.evil.com/datasets/a/b",
-        "https://raw.githubusercontent.com.evil.net/a/b/main/x.jsonl",
+        "https://localhost/x.jsonl",
+        "https://127.0.0.1:8080/admin.jsonl",
+        "https://169.254.169.254/latest/meta-data.json",
+        "https://192.168.1.1/admin.jsonl",
+        "https://10.0.0.5/x.jsonl",
+        "https://internal.example/x.jsonl",
     ],
-    ids=[
-        "other-host",
-        "cloud-metadata",
-        "loopback",
-        "localhost",
-        "suffix",
-        "subdomain",
-    ],
+    ids=["localhost", "loopback", "cloud-metadata", "router", "private-10", "public-name"],
 )
-def test_a_host_outside_the_allowlist_is_refused(url):
-    """The page hands this to a server on your network; it must not be a proxy."""
-    with pytest.raises(fetch.FetchError, match="not fetched"):
+def test_an_address_on_this_machine_or_network_is_refused(url):
+    """The page hands this to a server on your network; it must not be a proxy.
+
+    The check is on the resolved address, not the text, so a perfectly ordinary
+    hostname pointed at a private address is caught too.
+    """
+    with pytest.raises(fetch.FetchError, match="Only public addresses"):
         fetch.plan(url, {})
 
 
 @pytest.mark.parametrize(
     "url",
-    [
-        "http://huggingface.co/datasets/a/b",
-        "file:///etc/passwd",
-        "ftp://huggingface.co/x",
-        "gopher://huggingface.co/x",
-    ],
-    ids=["plain-http", "file", "ftp", "gopher"],
+    ["http://huggingface.co/datasets/a/b", "file:///etc/passwd", "ftp://example.com/x"],
+    ids=["plain-http", "file", "ftp"],
 )
 def test_only_https_is_fetched(url):
     with pytest.raises(fetch.FetchError, match="https"):
         fetch.plan(url, {})
+
+
+def test_a_host_that_does_not_resolve_is_reported():
+    with pytest.raises(fetch.FetchError, match="Could not look up"):
+        fetch.plan("https://nowhere.example/x.jsonl", {})
 
 
 def test_an_empty_url_is_refused():
@@ -99,23 +122,47 @@ def test_an_empty_url_is_refused():
         fetch.plan("  ", {})
 
 
-def test_a_redirect_off_the_allowlist_is_refused(monkeypatch):
-    """urllib follows redirects itself, so where the response landed is what counts."""
+@pytest.mark.parametrize(
+    ("url", "service"),
+    [
+        ("https://huggingface.co/datasets/a/b", "hf"),
+        ("https://github.com/a/b", "github"),
+        ("https://example.com/logs/a.jsonl", "direct"),
+    ],
+)
+def test_a_public_host_is_classified_by_what_is_understood(url, service):
+    assert fetch._check_host(url) == service
 
-    def landed_elsewhere(request, timeout=None):
-        return _Response(b"{}", "https://evil.example.com/landed")
 
-    monkeypatch.setattr(fetch.urllib.request, "urlopen", landed_elsewhere)
-    with pytest.raises(fetch.FetchError, match="not fetched"):
-        fetch._open("https://huggingface.co/api/datasets/a/b", None, "hf")
+def test_a_bare_url_is_taken_as_one_file():
+    """Only two hosts can be listed; everywhere else is a direct link."""
+    _, label, files = fetch.plan("https://example.com/runs/session.jsonl", {})
+    assert label == "example.com"
+    assert [f.name for f in files] == ["session.jsonl"]
 
 
-def test_a_redirect_that_stays_on_an_allowed_host_is_fine(monkeypatch):
-    def landed_on_cdn(request, timeout=None):
-        return _Response(b"{}", "https://cdn-lfs.huggingface.co/blob/abc")
+def test_a_bare_url_to_something_unreadable_says_so():
+    with pytest.raises(fetch.FetchError, match="not a kind this reads"):
+        fetch.plan("https://example.com/notes.pdf", {})
 
-    monkeypatch.setattr(fetch.urllib.request, "urlopen", landed_on_cdn)
-    with fetch._open("https://huggingface.co/x", None, "hf") as response:
+
+def test_a_redirect_into_private_space_is_refused(monkeypatch):
+    """A redirect is a second request to a second host, so it is checked again."""
+
+    def landed_private(request, timeout=None):
+        return _Response(b"{}", "https://192.168.1.1/x.jsonl")
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", landed_private)
+    with pytest.raises(fetch.FetchError, match="Only public addresses"):
+        fetch._open("https://example.com/x.jsonl", None, "direct")
+
+
+def test_a_redirect_between_public_hosts_is_fine(monkeypatch):
+    def landed_public(request, timeout=None):
+        return _Response(b"{}", "https://cdn.example.com/blob")
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", landed_public)
+    with fetch._open("https://example.com/x.jsonl", None, "direct") as response:
         assert response.read() == b"{}"
 
 
@@ -136,13 +183,12 @@ def test_a_token_travels_in_a_header_never_in_the_url(monkeypatch):
 
 @pytest.mark.parametrize(
     ("code", "expected"),
-    [(401, "needs a token"), (403, "needs a token"), (404, "Nothing there"), (500, "said 500")],
+    [(401, "needs a token"), (403, "needs a token"), (404, "Nothing there"),
+     (500, "said 500")],
 )
 def test_an_http_failure_says_what_to_do_about_it(monkeypatch, code, expected):
     def refuse(request, timeout=None):
-        raise fetch.urllib.error.HTTPError(
-            request.full_url, code, "no", {}, None
-        )
+        raise fetch.urllib.error.HTTPError(request.full_url, code, "no", {}, None)
 
     monkeypatch.setattr(fetch.urllib.request, "urlopen", refuse)
     with pytest.raises(fetch.FetchError, match=expected):

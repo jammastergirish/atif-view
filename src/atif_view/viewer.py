@@ -92,11 +92,10 @@ kbd,code,pre{font-family:var(--font-mono)}
 /* The header's controls are one control in three copies. Their box lives in a
    single rule because keeping it in three is what let the settings button drift
    into looking like plain text beside two pills. */
-#theme,#gear,#open,#fromurl{font:500 11px var(--font-mono);letter-spacing:.05em;
+#theme,#gear,#open{font:500 11px var(--font-mono);letter-spacing:.05em;
   color:var(--muted);background:var(--surface);border:1px solid var(--line);
   border-radius:8px;padding:7px 10px;cursor:pointer;flex:none}
 #theme:hover,#gear:hover{color:var(--ink)}
-#fromurl:hover{color:var(--accent);border-color:var(--accent)}
 #brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}
 #brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}
 #brand small{font:400 11.5px var(--font-mono);color:var(--faint)}
@@ -193,6 +192,16 @@ body.hide-side #main{padding-left:52px}
 #modal[hidden],#urlmodal[hidden]{display:none}
 .secret{margin-bottom:15px}
 .secret .row{margin-top:7px}
+.way{border-top:1px solid var(--line);padding:14px 0 4px}
+.way:first-of-type{border-top:none;padding-top:0}
+.way h3{font:600 12px var(--font-ui);margin:0 0 3px}
+.way .row{margin-top:9px;align-items:center}
+.way input{margin-top:7px}
+.blank{max-width:420px;margin:14vh auto 0;text-align:center;color:var(--muted)}
+.blank h2{font:600 19px var(--font-serif);color:var(--ink);margin:0 0 7px}
+.blank p{font-size:13.5px;margin:0 0 18px;line-height:1.6}
+.blank button{border:1px solid var(--accent);background:var(--accent);color:var(--bg);
+  border-radius:5px;padding:7px 16px;font:inherit;font-size:12.5px;cursor:pointer}
 #urlbar{height:4px;border-radius:2px;background:var(--sunk);overflow:hidden;margin-top:11px}
 #urlbar[hidden]{display:none}
 #urlfill{height:100%;width:0;background:var(--accent);border-radius:2px;
@@ -425,8 +434,7 @@ pre.json{line-height:1.45}
   <div id="crumb"></div>
   <button id="theme" onclick="cycleTheme()" title="Change theme"></button>
   <button id="gear" onclick="openSettings()" title="Settings">Settings</button>
-  <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive from this machine">From local…</button>
-  <button id="fromurl" onclick="openUrl()" title="Fetch from Hugging Face or GitHub">From URL…</button>
+  <button id="open" onclick="openAdd()" title="Add transcripts to the library">Add…</button>
 </header>
 
 <div id="modal" hidden onclick="if(event.target===this)closeSettings()">
@@ -446,22 +454,48 @@ pre.json{line-height:1.45}
 
 <div id="urlmodal" hidden onclick="if(event.target===this)closeUrl()">
   <div class="sheet">
-    <h2>Open from a URL</h2>
-    <input id="urlin" spellcheck="false" autocomplete="off"
-           placeholder="https://huggingface.co/datasets/owner/name"
-           onkeydown="if(event.key==='Enter')planUrl()">
-    <label for="urlinto">Into</label>
-    <input id="urlinto" spellcheck="false" autocomplete="off"
-           onkeydown="if(event.key==='Enter')planUrl()">
-    <div id="urlbar" hidden><div id="urlfill"></div></div>
-    <p class="fine" id="urlstate">Hugging Face and GitHub only — a repo, a folder
-       inside one, or a single file. Nothing downloads until you have seen what is
-       there.</p>
+    <h2>Add transcripts</h2>
+
+    <section class="way">
+      <h3>From this machine</h3>
+      <p class="fine">Finds sessions Claude Code, Codex and Copilot have already
+         written here. Nothing is sent anywhere.</p>
+      <div class="row">
+        <button class="primary" id="scango" onclick="scanMachine()">Look on this machine</button>
+        <span class="fine" id="scanstate"></span>
+      </div>
+    </section>
+
+    <section class="way">
+      <h3>A file or folder</h3>
+      <p class="fine">A log, a converted trajectory, a HAR, or an archive of them.
+         Dragging onto the window does the same.</p>
+      <div class="row">
+        <button onclick="picker.click()">Choose…</button>
+      </div>
+    </section>
+
+    <section class="way">
+      <h3>From a URL</h3>
+      <p class="fine">A Hugging Face dataset or GitHub repository — whole, or one
+         folder inside it — or a direct link to a single file.</p>
+      <input id="urlin" spellcheck="false" autocomplete="off"
+             placeholder="https://huggingface.co/datasets/owner/name"
+             onkeydown="if(event.key==='Enter')planUrl()">
+      <label for="urlinto">Into</label>
+      <input id="urlinto" spellcheck="false" autocomplete="off"
+             onkeydown="if(event.key==='Enter')planUrl()">
+      <div id="urlbar" hidden><div id="urlfill"></div></div>
+      <p class="fine" id="urlstate"></p>
+      <div class="row">
+        <button class="primary" id="urlgo" onclick="planUrl()">Look</button>
+      </div>
+      <p class="fine bad" id="urlerr" hidden></p>
+    </section>
+
     <div class="row">
-      <button class="primary" id="urlgo" onclick="planUrl()">Look</button>
       <button onclick="closeUrl()">Close</button>
     </div>
-    <p class="fine bad" id="urlerr" hidden></p>
   </div>
 </div>
 
@@ -995,6 +1029,14 @@ const titleOf=e=>e.title||short(e.project||e.session_id||e.path);
 /* Diwan shares one grid template between the header and every row so the
    columns line up; the same trick, with the columns this corpus has. */
 function showLibrary(){
+  if(!INDEX.length&&!q.value){
+    main.innerHTML=`<div class="blank">
+      <h2>Nothing here yet</h2>
+      <p>Add transcripts from this machine, from a file, or from a URL.</p>
+      <button class="primary" onclick="openAdd()">Add…</button>
+    </div>`;
+    return;
+  }
   cur=null;drawCrumb();
   const rows=libraryRows();
   main.innerHTML=`
@@ -1121,19 +1163,42 @@ const clearSecret=name=>settings({name,clear:true});
    files, and nobody should find that out by pressing a button once. */
 let PLANNED=null;
 
-function openUrl(){
+function openAdd(){
   PLANNED=null;
   const err=document.getElementById("urlerr");
   if(err){err.hidden=true;err.textContent=""}
+  const said=document.getElementById("scanstate");
+  if(said)said.textContent="";
   urlmodal.hidden=false;
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
   const into=document.getElementById("urlinto");
   if(into)into.value=DOWNLOADS||"";
-  setUrlState("Hugging Face and GitHub only — a repo, a folder inside one, or a "
-    +"single file. Nothing downloads until you have seen what is there.","Look");
+  setUrlState("Nothing downloads until you have seen what is there.","Look");
+}
+
+/* Indexing a machine is a deliberate act, not something to do because the
+   library happens to be empty. */
+async function scanMachine(){
+  const said=document.getElementById("scanstate");
+  const go=document.getElementById("scango");
+  if(go)go.disabled=true;
+  if(said)said.textContent="Looking…";
+  try{
+    const {found,total}=await postJSON("/api/scan",{});
+    await refreshIndex();
+    cur=null;showLibrary();
+    if(said)said.textContent=found
+      ?`Found ${num(found)} — ${num(total)} in the library.`
+      :"Nothing found on this machine.";
+  }catch(e){
+    if(said)said.textContent=e.message;
+  }finally{
+    if(go)go.disabled=false;
+  }
 }
 const closeUrl=()=>{urlmodal.hidden=true;PLANNED=null};
+const openUrl=openAdd;   // the drop overlay and the empty state both point here
 
 function showProgress(done,total,name){
   const bar=document.getElementById("urlbar");
@@ -1906,6 +1971,27 @@ UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 # recognise one during a scan; a second constant here could drift from it.
 
 
+def _file_into_collections(found, home: Path, label: str) -> None:
+    """Put what arrived into a collection named after where it came from.
+
+    A repository's own folders are the organisation its author chose; adopting
+    it beats dropping two hundred unfiled rows on someone. Only a session with
+    no collection yet is touched, so this never overrides a decision.
+    """
+    for entry in found:
+        record = library.get(entry.key)
+        if record.get("folder"):
+            continue
+        try:
+            inner = Path(entry.path).parent.relative_to(home)
+        except ValueError:
+            inner = Path()
+        # The download folder keeps owner--repo so two owners cannot collide on
+        # disk; a collection is read by a person, so it takes the repo name.
+        parts = [label.split("--")[-1], *(p for p in inner.parts if p not in (".", ""))]
+        library.update(entry.key, folder="/".join(parts))
+
+
 def _ai_state() -> dict:
     """What the page may know about credentials: whether, and from where.
 
@@ -2035,6 +2121,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
+
+        if url.path == "/api/scan":
+            # Deliberate, not automatic: this indexes every agent session on the
+            # machine, which is not something to do because a library is empty.
+            try:
+                found = scan()
+            except (ValueError, OSError) as exc:
+                self._json({"error": str(exc)}, 500)
+                return
+            with self.lock:
+                merged = corpus.merge(self.entries, found)
+                self.entries = merged
+                _Handler.entries = merged
+            corpus.save(merged)
+            self._json({"found": len(found), "total": len(merged)})
+            return
 
         if url.path == "/api/fetch":
             try:
@@ -2278,6 +2380,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.entries = merged
                 _Handler.entries = merged
             corpus.save(merged)
+            _file_into_collections(found, home, label)
             yield {"t": "added", "added": len(found), "into": str(home)}
 
         self._frames(produce)

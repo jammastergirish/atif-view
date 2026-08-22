@@ -19,29 +19,42 @@ atif-view bundle.zip             # a bundle someone sent you
 atif-view --port 8080 --no-open
 ```
 
-**From local…** in the top bar opens a file, directory or archive from this
-machine; drag-and-drop does the same. **From URL…** beside it fetches straight
-from Hugging Face or GitHub: a
-whole repo, one folder inside it, or a single file — whichever the URL points
-at. Paste a dataset root and it takes everything convertible; paste
-`…/tree/main/some/folder` and it takes that folder only.
+**Add…** in the top bar is the only way in, and it offers three:
 
-Nothing downloads on the first press. The button lists what is there — how many
-files, how large, and where they will land — and downloads only when pressed
-again, with a progress bar as each file arrives. The index is refreshed before
-anything cosmetic happens, so a failure after the download cannot cost you the
-rows you just paid for. Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
+- **From this machine** — finds sessions Claude Code, Codex and Copilot have
+  already written here. This is a deliberate act, never automatic: a first run
+  opens empty rather than indexing someone's entire history of every agent
+  because the library happened to be empty.
+- **A file or folder** — a log, a converted trajectory, a HAR, or an archive of
+  them. Dragging onto the window does the same.
+- **From a URL** — a Hugging Face dataset or GitHub repository, whole or one
+  folder inside it, or a direct link to a single file on any host.
+
+Nothing downloads on the first press. It lists what is there — how many files,
+how large, and where they will land — and downloads only when pressed again,
+with a progress bar as each file arrives. The index is refreshed before anything
+cosmetic happens, so a failure after the download cannot cost you the rows you
+just paid for.
+
+Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
 launched, editable in the dialog, so a dataset you pull is somewhere you can
-actually reach rather than buried in a dot-directory. Because those files are
-yours rather than the viewer's, removing a session from the library forgets the
-entry without deleting them.
+reach rather than buried in a dot-directory. Because those files are yours
+rather than the viewer's, removing a session from the library forgets the entry
+without deleting them.
 
-Only `huggingface.co` and `github.com` (with their API and raw hosts) are
-fetched, and only over HTTPS. That is a deliberate limit rather than an
-oversight: the page hands a URL to a server running as you, on your network, so
-an unrestricted fetcher would be a way to reach your router, a cloud metadata
-endpoint, or something bound to localhost. A redirect off those hosts is refused
-rather than followed.
+What arrives is filed into a collection named after where it came from —
+`SLEIGHT-Bench/attacks/model_priors/…` — because a repository's own folders are
+the organisation its author chose, and two hundred unfiled rows are no use to
+anyone. A session you have already filed is left alone.
+
+Any host may be fetched, but the name is resolved first and refused if it lands
+on a loopback, link-local, private or reserved address — checked again after
+redirects, since a redirect is a second request to a second host. That is not
+caution for its own sake: the page hands a URL to a server running as you, on
+your network, so an unguarded fetcher is a way to reach your router, a cloud
+metadata endpoint, or something bound to localhost. Only Hugging Face and GitHub
+are understood well enough to list a repository; every other host is a link to
+one file.
 
 Gated repositories need a token — see Settings below.
 
