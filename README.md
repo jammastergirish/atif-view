@@ -35,8 +35,8 @@ cosmetic happens, so a failure after the download cannot cost you the rows you
 just paid for.
 
 Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
-launched, editable in the dialog, so a dataset you pull is somewhere you can
-reach rather than buried in a dot-directory. Because those files are yours
+launched — one place, not a choice to make each time — so a dataset you pull is
+somewhere you can reach rather than buried in a dot-directory. Because those files are yours
 rather than the viewer's, removing a session from the library forgets the entry
 without deleting them.
 
@@ -66,7 +66,9 @@ holds an AWS credential and never has to renew one. Sign in yourself —
 aws sso login --profile rw-eng
 ```
 
-— set that profile name in Settings, and the viewer reuses the session. It never
+— and the viewer reuses the session. Naming the profile in Settings is only
+needed when a machine has several: with one configured, or `AWS_PROFILE` set,
+there is nothing to disambiguate and nothing to type. It never
 runs the login: that is an interactive, browser-based act belonging to the person
 at the keyboard. When there is no usable session it says so and gives the exact
 command, because the CLI's own advice (`aws login`) is not the SSO one.

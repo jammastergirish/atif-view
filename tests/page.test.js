@@ -724,12 +724,11 @@ test("a plan is shown before anything downloads", async () => {
         names:["a.jsonl","b.jsonl","c.jsonl","d.jsonl"]})};
     };
     document.getElementById=id=>({urlin:{value:"https://huggingface.co/datasets/o/n"},
-      urlinto:{value:"/tmp/downloads"},
       urlerr:{hidden:true},urlstate:globalThis.__state,urlgo:globalThis.__button})[id]||null;
     return planUrl();`, (globalThis.__state = state), (globalThis.__button = button));
   assert.strictEqual(posted.length, 1);
   assert.ok(!posted[0].confirm, "downloaded without showing the plan first");
-  assert.strictEqual(posted[0].into, "/tmp/downloads", "the folder was not sent");
+  assert.ok(!("into" in posted[0]), "a destination was sent; there is only one now");
   assert.match(state.textContent, /86 files in owner--name/);
   assert.match(state.textContent, /4\.0 MB/);
   assert.match(button.textContent, /Download 86/);

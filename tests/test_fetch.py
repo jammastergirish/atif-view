@@ -525,10 +525,30 @@ def test_any_missing_session_says_how_to_fix_it(monkeypatch, said):
         fetch.plan("s3://rr-agent-transcripts/runs", {"aws": "rw-eng"})
 
 
-def test_without_a_profile_it_says_to_set_one(monkeypatch):
-    _aws_stub(monkeypatch, code=255, stderr="Unable to locate credentials")
-    with pytest.raises(fetch.FetchError, match="set that profile in Settings"):
-        fetch.plan("s3://rr-agent-transcripts/runs", {})
+def test_the_only_configured_profile_is_used_without_being_named(monkeypatch):
+    """With one profile there is nothing to disambiguate, so nothing to ask."""
+    monkeypatch.setattr(fetch, "_profiles", lambda: ["rw-eng"])
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    assert fetch.resolve_profile("") == "rw-eng"
+
+
+def test_several_profiles_means_one_must_be_chosen(monkeypatch):
+    monkeypatch.setattr(fetch, "_profiles", lambda: ["a", "b"])
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    assert fetch.resolve_profile("") == ""
+
+
+def test_a_configured_profile_wins_over_the_environment(monkeypatch):
+    monkeypatch.setenv("AWS_PROFILE", "from-env")
+    monkeypatch.setattr(fetch, "_profiles", lambda: ["a", "b"])
+    assert fetch.resolve_profile("chosen") == "chosen"
+    assert fetch.resolve_profile("") == "from-env"
+
+
+def test_a_profile_from_the_environment_that_could_be_a_flag_is_ignored(monkeypatch):
+    monkeypatch.setenv("AWS_PROFILE", "--endpoint-url")
+    monkeypatch.setattr(fetch, "_profiles", lambda: [])
+    assert fetch.resolve_profile("") == ""
 
 
 def test_a_missing_cli_is_reported_plainly(monkeypatch):

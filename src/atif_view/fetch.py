@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import ipaddress
+import os
 import shutil
 import socket
 import subprocess
@@ -219,12 +220,41 @@ def _aws(args: list[str], profile: str, json_out: bool = True) -> str:
         if any(word in lowered for word in ("expired", "sso", "credential", "token")):
             named = profile or "<your-profile>"
             raise FetchError(
-                f"No usable AWS session{'' if profile else ' for the default profile'}. "
-                f"In a terminal, run: aws sso login --profile {named}"
-                + ("" if profile else "  — and set that profile in Settings.")
+                "No usable AWS session. In a terminal, run: "
+                f"aws sso login --profile {named}"
             )
         raise FetchError(detail.removeprefix("aws: ").strip())
     return done.stdout
+
+
+def _profiles() -> list[str]:
+    """Profile names the aws CLI knows about."""
+    if shutil.which("aws") is None:
+        return []
+    try:
+        done = subprocess.run(
+            ["aws", "configure", "list-profiles"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def resolve_profile(configured: str) -> str:
+    """Which AWS profile to use, asking as little as possible.
+
+    Settings first, then AWS_PROFILE, then — if the machine has exactly one
+    profile — that one, because there is nothing to disambiguate. Naming a
+    profile should be something only people with several ever have to do.
+    """
+    if configured:
+        return configured
+    from_env = os.environ.get("AWS_PROFILE", "").strip()
+    if from_env and AWS_PROFILE.match(from_env):
+        return from_env
+    known = [p for p in _profiles() if AWS_PROFILE.match(p)]
+    return known[0] if len(known) == 1 else ""
 
 
 def _s3_plan(url: str, profile: str) -> tuple[str, list[Remote], str]:
@@ -422,7 +452,7 @@ def plan(url: str, tokens: dict[str, str | None]) -> Plan:
         raise FetchError("No URL given.")
 
     if url.startswith("s3://"):
-        bucket, files, where = _s3_plan(url, tokens.get("aws") or "")
+        bucket, files, where = _s3_plan(url, resolve_profile(tokens.get("aws") or ""))
         return _sized(Plan("s3", bucket, files, where))
 
     service = _check_host(url)
@@ -466,7 +496,7 @@ def download(
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if service == "s3":
-            _s3_download(remote, target, tokens.get("aws") or "")
+            _s3_download(remote, target, resolve_profile(tokens.get("aws") or ""))
             yield target
             continue
 

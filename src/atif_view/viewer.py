@@ -99,9 +99,6 @@ kbd,code,pre{font-family:var(--font-mono)}
 #brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}
 #brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}
 #brand small{font:400 11.5px var(--font-mono);color:var(--faint)}
-#themes{margin-left:auto;display:inline-flex;gap:1px;border:1px solid var(--line);border-radius:20px;padding:1px;background:var(--surface)}
-#themes span{width:15px;height:15px;border-radius:50%;cursor:pointer;border:2px solid transparent}
-#themes span.on{border-color:var(--accent)}
 #open:hover{color:var(--accent);border-color:var(--accent)}
 #drop{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);
   display:none;align-items:center;justify-content:center;font-size:16px;color:var(--accent);
@@ -235,7 +232,6 @@ body.hide-side #main{padding-left:52px}
   white-space:pre-line}
 .sheet .fine code{font:11px var(--font-mono);color:var(--ink)}
 .sheet .fine.bad{color:var(--danger)}
-.sheet .fine.warn{color:var(--ink)}
 .sheet .row{display:flex;gap:8px;margin-top:16px}
 .sheet .row button{border:1px solid var(--line);background:var(--surface);color:var(--ink);
   border-radius:5px;padding:6px 14px;font:inherit;font-size:12.5px;cursor:pointer}
@@ -318,8 +314,6 @@ body.hide-side #main{padding-left:52px}
 
 /* raw + files panels */
 .rawmeta{font-size:11.5px;color:var(--faint);margin-bottom:8px;overflow-wrap:anywhere}
-.rawsrc{background:var(--sunk);border-radius:9px;padding:12px;font-size:11.5px;line-height:1.5;
-  max-height:70vh;overflow:auto;white-space:pre;overflow-wrap:normal}
 table.files{border-collapse:collapse;width:100%;font-size:13px}
 table.files th{text-align:left;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--faint);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
@@ -491,9 +485,6 @@ pre.json{line-height:1.45}
          in Settings.</p>
       <input id="urlin" spellcheck="false" autocomplete="off"
              placeholder="https://huggingface.co/… · https://github.com/… · s3://bucket/prefix"
-             onkeydown="if(event.key==='Enter')planUrl()">
-      <label for="urlinto">Into</label>
-      <input id="urlinto" spellcheck="false" autocomplete="off"
              onkeydown="if(event.key==='Enter')planUrl()">
       <div id="urlbar" hidden><div id="urlfill"></div></div>
       <p class="fine" id="urlstate"></p>
@@ -833,7 +824,7 @@ const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(
 const PAGE_SIZE=250;
 let INDEX=[],GROUPS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},EDITING=null,
-    EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
+    EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
 
 function reveal(a){
@@ -1308,8 +1299,6 @@ function openAdd(){
   urlmodal.hidden=false;
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
-  const into=document.getElementById("urlinto");
-  if(into)into.value=DOWNLOADS||"";
   setUrlState("Nothing downloads until you have seen what is there.","Look");
 }
 
@@ -1328,7 +1317,6 @@ async function scanMachine(){
   }catch(e){note(e.message)}
 }
 const closeUrl=()=>{urlmodal.hidden=true;PLANNED=null};
-const openUrl=openAdd;   // the drop overlay and the empty state both point here
 
 function showProgress(done,total,name){
   const bar=document.getElementById("urlbar");
@@ -1352,13 +1340,12 @@ async function planUrl(){
   err.hidden=true;
   const url=(document.getElementById("urlin").value||"").trim();
   if(!url)return;
-  const into=(document.getElementById("urlinto").value||"").trim();
 
   if(PLANNED===url){
     let result=null;
     setUrlState("Starting…","Working");
     try{
-      await streamJSON("/api/fetch",{url,into,confirm:true},frame=>{
+      await streamJSON("/api/fetch",{url,confirm:true},frame=>{
         if(frame.t==="file")showProgress(frame.done,frame.total,frame.name);
         else if(frame.t==="added")result=frame;
       });
@@ -1380,13 +1367,13 @@ async function planUrl(){
 
   setUrlState("Looking…","Working");
   try{
-    const p=await postJSON("/api/fetch",{url,into});
+    const p=await postJSON("/api/fetch",{url});
     PLANNED=url;
     const size=p.bytes?` · ${bytes(p.bytes)}`:"";
     const sample=p.names.length?` — ${p.names.slice(0,3).join(", ")}${
       p.count>3?", …":""}`:"";
     setUrlState(`${p.count} file${p.count===1?"":"s"} in ${p.label}${size}${sample}\n`
-      +`into ${p.into}`, `Download ${p.count}`);
+      +`→ ${p.into}`, `Download ${p.count}`);
   }catch(e){
     err.textContent=e.message;err.hidden=false;
     setUrlState("","Look");PLANNED=null;
@@ -1586,12 +1573,11 @@ function pick(key){
   main.innerHTML=`<div class="empty">Converting…</div>`;
   fetch("/api/trajectory?id="+encodeURIComponent(key)).then(r=>r.json()).then(t=>{
     if(t.error){main.innerHTML=`<div class="empty">${esc(t.error)}</div>`;return}
-    traj=t;onlyBranches=false;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;RENAMING=false;render();
+    traj=t;limit=PAGE_SIZE;query="";lens="all";tab="trajectory";extra=null;RENAMING=false;render();
   });
 }
 
 const toggle=r=>{show[r]=!show[r];limit=PAGE_SIZE;render()};
-const toggleBranches=()=>{onlyBranches=!onlyBranches;limit=PAGE_SIZE;render()};
 const more=()=>{limit+=PAGE_SIZE*4;render()};
 const toggleRaw=()=>{raw=!raw;render()};
 
@@ -1875,7 +1861,7 @@ function panelTab(){
   if(tab==="raw"){
     return `<div class="rawmeta">${esc(d.path)} · ${(d.size/1048576).toFixed(2)} MB${
       d.truncated?` · showing the first ${(RAW_KB)} KB`:""}</div>
-      <pre class="rawsrc">${esc(d.text)}</pre>`;
+      ${rawSource(d.text).html}`;
   }
   if(!d.length)return `<div class="empty">No associated files.</div>`;
   return `<table class="files"><thead><tr><th>File</th><th>Role</th><th>Size</th></tr></thead><tbody>${
