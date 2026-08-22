@@ -44,8 +44,8 @@ wheels = [
 
 [[package]]
 name = "atif-make"
-version = "0.3.0"
-source = { git = "https://github.com/jammastergirish/atif-make?branch=main#72061c239b8a1698388b04fea80d5f2967867478" }
+version = "0.4.0"
+source = { git = "https://github.com/jammastergirish/atif-make?branch=main#42672b0ac3ff5b559dee46f0656f352e560b6877" }
 
 [[package]]
 name = "atif-view"
