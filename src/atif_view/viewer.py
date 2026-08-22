@@ -30,7 +30,7 @@ from atif_make.archive import extract, is_archive
 from atif_make.convert import convert
 from atif_make.corpus import Entry, scan
 
-from . import ai, config, library
+from . import ai, config, fetch, library
 
 PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -92,10 +92,11 @@ kbd,code,pre{font-family:var(--font-mono)}
 /* The header's controls are one control in three copies. Their box lives in a
    single rule because keeping it in three is what let the settings button drift
    into looking like plain text beside two pills. */
-#theme,#gear,#open{font:500 11px var(--font-mono);letter-spacing:.05em;
+#theme,#gear,#open,#fromurl{font:500 11px var(--font-mono);letter-spacing:.05em;
   color:var(--muted);background:var(--surface);border:1px solid var(--line);
   border-radius:8px;padding:7px 10px;cursor:pointer;flex:none}
 #theme:hover,#gear:hover{color:var(--ink)}
+#fromurl:hover{color:var(--accent);border-color:var(--accent)}
 #brand{padding:13px 14px 9px;display:flex;align-items:center;gap:9px}
 #brand .mark{font:600 17px var(--font-serif);letter-spacing:-.01em;color:var(--ink)}
 #brand small{font:400 11.5px var(--font-mono);color:var(--faint)}
@@ -187,9 +188,11 @@ body.hide-side #main{padding-left:52px}
 .acts button:hover{color:var(--accent);background:var(--soft)}
 
 /* Settings, over the whole page */
-#modal{position:fixed;inset:0;background:rgba(0,0,0,.34);display:flex;
+#modal,#urlmodal{position:fixed;inset:0;background:rgba(0,0,0,.34);display:flex;
   align-items:center;justify-content:center;z-index:50;padding:24px}
-#modal[hidden]{display:none}
+#modal[hidden],#urlmodal[hidden]{display:none}
+.secret{margin-bottom:15px}
+.secret .row{margin-top:7px}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   box-shadow:var(--shadow);padding:22px 24px;width:min(520px,100%)}
 .sheet h2{font:600 15px var(--font-ui);margin:0 0 14px}
@@ -199,7 +202,8 @@ body.hide-side #main{padding-left:52px}
   background:var(--surface);color:var(--ink);font:13px var(--font-mono)}
 .sheet input:focus{outline:none;border-color:var(--accent)}
 .sheet input::placeholder{color:var(--muted);opacity:1}
-.sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0}
+.sheet .fine{font-size:11.5px;color:var(--muted);line-height:1.55;margin:8px 0 0;
+  white-space:pre-line}
 .sheet .fine code{font:11px var(--font-mono);color:var(--ink)}
 .sheet .fine.bad{color:var(--danger)}
 .sheet .fine.warn{color:var(--ink)}
@@ -418,27 +422,44 @@ pre.json{line-height:1.45}
   <button id="theme" onclick="cycleTheme()" title="Change theme"></button>
   <button id="gear" onclick="openSettings()" title="Settings">Settings</button>
   <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
+  <button id="fromurl" onclick="openUrl()" title="Fetch from Hugging Face or GitHub">From URL…</button>
 </header>
 
 <div id="modal" hidden onclick="if(event.target===this)closeSettings()">
   <div class="sheet">
     <h2>Settings</h2>
-    <label for="akey">Anthropic API key</label>
-    <input id="akey" type="password" spellcheck="false" autocomplete="off"
-           placeholder="sk-ant-…" onkeydown="if(event.key==='Enter')saveKey()">
-    <p class="fine" id="keystate"></p>
-    <p class="fine">Stored at <code>~/.atif/config.json</code>, readable only by you.
-       It is sent to the Anthropic API and nowhere else, and is never read back into
-       this page. A key in your keychain or a password manager is safer than one in a
-       file — set <code>ANTHROPIC_API_KEY</code> instead and leave this empty.</p>
+    <div id="secrets"></div>
+    <p class="fine">Kept in <code>~/.atif/config.json</code>, readable only by you.
+       Each is sent to its own service and nowhere else, and none is ever read back
+       into this page. A token in your keychain or password manager is safer than one
+       in a file — set the environment variable instead and leave the field empty.</p>
     <div class="row">
-      <button class="primary" onclick="saveKey()">Save key</button>
-      <button onclick="clearKey()">Remove</button>
       <button onclick="closeSettings()">Close</button>
     </div>
     <p class="fine bad" id="keyerr" hidden></p>
   </div>
 </div>
+
+<div id="urlmodal" hidden onclick="if(event.target===this)closeUrl()">
+  <div class="sheet">
+    <h2>Open from a URL</h2>
+    <input id="urlin" spellcheck="false" autocomplete="off"
+           placeholder="https://huggingface.co/datasets/owner/name"
+           onkeydown="if(event.key==='Enter')planUrl()">
+    <label for="urlinto">Into</label>
+    <input id="urlinto" spellcheck="false" autocomplete="off"
+           onkeydown="if(event.key==='Enter')planUrl()">
+    <p class="fine" id="urlstate">Hugging Face and GitHub only — a repo, a folder
+       inside one, or a single file. Nothing downloads until you have seen what is
+       there.</p>
+    <div class="row">
+      <button class="primary" id="urlgo" onclick="planUrl()">Look</button>
+      <button onclick="closeUrl()">Close</button>
+    </div>
+    <p class="fine bad" id="urlerr" hidden></p>
+  </div>
+</div>
+
 <div id="shell">
 <div id="side">
   <div id="brand"><small id="count"></small></div>
@@ -756,9 +777,12 @@ function pre(content) {
 
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num=n=>(n??0).toLocaleString();
+const bytes=n=>n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
+  :n>=1024**2?`${(n/1024**2).toFixed(1)} MB`
+  :`${Math.max(1,Math.round(n/1024))} KB`;
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],FOLDERS=[],TAGS=[],AI={},CHAT=[],ASK_OPEN=false,cur=null,traj=null,
+let INDEX=[],FOLDERS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
     collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
@@ -790,7 +814,7 @@ async function openFiles(files){
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
-  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];AI=fresh.ai||{};
+  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];AI=fresh.ai||{};DOWNLOADS=fresh.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();
   if(first!==null)pick(first);
   if(problems.length)note(problems.join("\n"));
@@ -860,7 +884,7 @@ addEventListener("keydown",e=>{
 });
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
 });
 q.oninput=drawList;
@@ -1035,36 +1059,36 @@ const aiOn=()=>{
 function openSettings(){
   const err=document.getElementById("keyerr");
   if(err){err.hidden=true;err.textContent=""}
-  const box=document.getElementById("akey");
-  if(box)box.value="";
-  showKeyState();
+  drawSecrets();
   modal.hidden=false;
-  if(box)box.focus();
+  const first=document.querySelector(".secret input");
+  if(first)first.focus();
 }
 const closeSettings=()=>{modal.hidden=true};
 
-/* Two independent things must both be true — a credential and the SDK — so
-   say which one is missing. Reporting only "unavailable" made a saved key look
-   like a failed save. */
-function showKeyState(){
-  const box=document.getElementById("akey");
-  // Dots as a placeholder, never as a value: a value can be submitted, and
-  // twenty bullets would pass the length check and be stored as the key. The
-  // page is never told the real one, so the tail is all it can show.
-  if(box)box.placeholder=
-      AI.source==="settings"?`${"•".repeat(24)} ${AI.hint}`
-    :AI.source==="environment"?"Set by ANTHROPIC_API_KEY"
-    :"sk-ant-…";
-
-  const el=document.getElementById("keystate");
-  if(!el)return;
-  const stored=AI.source==="settings"?`Key saved here (${AI.hint}).`
-    :AI.source==="environment"?"Using ANTHROPIC_API_KEY from the environment."
-    :"No key saved.";
-  el.textContent=AI.available
-    ?`${stored} AI features are on · model ${AI.model}`
-    :`${stored} ${AI.reason||"AI features are off."}`;
-  el.className=AI.available?"fine":"fine warn";
+/* One field per credential, built from what the server says it can hold, so a
+   new one needs no markup here. */
+function drawSecrets(){
+  const host=document.getElementById("secrets");
+  if(!host)return;
+  const all=AI.secrets||{};
+  host.innerHTML=Object.keys(all).map(name=>{
+    const s=all[name];
+    // Dots as a placeholder, never a value: a value can be submitted, and
+    // bullets would pass the length check and be stored as the token.
+    const shown=s.source==="settings"?`${"•".repeat(24)} ${s.hint}`
+      :s.source==="environment"?`Set by ${s.env}`
+      :s.placeholder;
+    return `<div class="secret">
+      <label for="sec-${name}">${esc(s.label)}</label>
+      <input id="sec-${name}" type="password" spellcheck="false" autocomplete="off"
+        placeholder="${esc(shown)}" onkeydown="if(event.key==='Enter')saveSecret('${name}')">
+      <div class="row">
+        <button class="primary" onclick="saveSecret('${name}')">Save</button>
+        <button onclick="clearSecret('${name}')">Remove</button>
+      </div>
+    </div>`;
+  }).join("");
 }
 
 async function settings(body){
@@ -1072,17 +1096,74 @@ async function settings(body){
   err.hidden=true;
   try{
     AI=await postJSON("/api/settings",body);
-    document.getElementById("akey").value="";
-    showKeyState();
+    drawSecrets();
     render();
   }catch(e){err.textContent=e.message;err.hidden=false}
 }
 
-const saveKey=()=>{
-  const value=document.getElementById("akey").value.trim();
-  if(value)settings({api_key:value});
+const saveSecret=name=>{
+  const value=(document.getElementById("sec-"+name)||{}).value||"";
+  if(value.trim())settings({name,token:value.trim()});
 };
-const clearKey=()=>settings({clear:true});
+const clearSecret=name=>settings({name,clear:true});
+
+/* Fetching by URL: look first, then confirm. A dataset URL can name hundreds of
+   files, and nobody should find that out by pressing a button once. */
+let PLANNED=null;
+
+function openUrl(){
+  PLANNED=null;
+  const err=document.getElementById("urlerr");
+  if(err){err.hidden=true;err.textContent=""}
+  urlmodal.hidden=false;
+  const box=document.getElementById("urlin");
+  if(box){box.value="";box.focus()}
+  const into=document.getElementById("urlinto");
+  if(into)into.value=DOWNLOADS||"";
+  setUrlState("Hugging Face and GitHub only — a repo, a folder inside one, or a "
+    +"single file. Nothing downloads until you have seen what is there.","Look");
+}
+const closeUrl=()=>{urlmodal.hidden=true;PLANNED=null};
+
+function setUrlState(text,button){
+  const state=document.getElementById("urlstate");
+  if(state)state.textContent=text;
+  const go=document.getElementById("urlgo");
+  if(go)go.textContent=button;
+}
+
+async function planUrl(){
+  const err=document.getElementById("urlerr");
+  err.hidden=true;
+  const url=(document.getElementById("urlin").value||"").trim();
+  if(!url)return;
+  const into=(document.getElementById("urlinto").value||"").trim();
+
+  if(PLANNED===url){
+    setUrlState("Downloading…","Working");
+    try{
+      const {added,into:where}=await postJSON("/api/fetch",{url,into,confirm:true});
+      closeUrl();
+      note(`Added ${added} session${added===1?"":"s"} — downloaded to ${where}`);
+      await refreshIndex();
+    }catch(e){err.textContent=e.message;err.hidden=false;setUrlState("","Look");PLANNED=null}
+    return;
+  }
+
+  setUrlState("Looking…","Working");
+  try{
+    const p=await postJSON("/api/fetch",{url,into});
+    PLANNED=url;
+    const size=p.bytes?` · ${bytes(p.bytes)}`:"";
+    const sample=p.names.length?` — ${p.names.slice(0,3).join(", ")}${
+      p.count>3?", …":""}`:"";
+    setUrlState(`${p.count} file${p.count===1?"":"s"} in ${p.label}${size}${sample}\n`
+      +`into ${p.into}`, `Download ${p.count}`);
+  }catch(e){
+    err.textContent=e.message;err.hidden=false;
+    setUrlState("","Look");PLANNED=null;
+  }
+}
 
 /* Nothing here runs on its own: every request below is the direct result of a
    click, so a transcript's contents never leave the machine unasked. */
@@ -1142,7 +1223,7 @@ async function explainCall(event,callId){
   if(!box)return;
   box.hidden=false;
   box.className="aiout busy";
-  box.textContent="Reading the call…";
+  box.textContent="Reading the call and response…";
   let text="";
   try{
     await streamClaude({what:"call",call_id:callId},frame=>{
@@ -1235,7 +1316,7 @@ async function annotate(key,fields){
 
 async function refreshIndex(){
   const d=await fetch("/api/index").then(r=>r.json());
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};
+  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";
   drawList();
   if(!cur)showLibrary();
@@ -1577,7 +1658,7 @@ function panelTab(){
   return `<table class="files"><thead><tr><th>File</th><th>Role</th><th>Size</th></tr></thead><tbody>${
     d.map(f=>`<tr><td>${pathAnchor(f.path,esc(f.name))}</td>
       <td><span class="pill">${esc(f.role)}</span></td>
-      <td>${(f.size/1024).toFixed(0)} KB</td></tr>`).join("")}</tbody></table>`;
+      <td>${bytes(f.size)}</td></tr>`).join("")}</tbody></table>`;
 }
 const RAW_KB=512;
 // Pretty-printing every line of a large log would balloon the page; enough to
@@ -1800,9 +1881,12 @@ def _ai_state() -> dict:
     return {
         "available": ok,
         "reason": reason,
-        "source": config.source(),
-        "hint": config.hint(),
+        "source": config.source("anthropic"),
+        "hint": config.hint("anthropic"),
         "model": ai.MODEL,
+        # Every credential the viewer can hold — names and tails, never values.
+        "secrets": config.state(),
+        "hosts": sorted(set(fetch.HOSTS)),
     }
 
 
@@ -1917,6 +2001,16 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         url = urlparse(self.path)
 
+        if url.path == "/api/fetch":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            self._fetch(body)
+            return
+
         if url.path == "/api/settings":
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -1927,10 +2021,11 @@ class _Handler(BaseHTTPRequestHandler):
             # The key is read out of the body and handed straight to storage:
             # not logged, not echoed, not kept in memory beyond this call.
             try:
+                name = body.get("name") or "anthropic"
                 if body.get("clear"):
-                    config.clear_api_key()
-                elif "api_key" in body:
-                    config.set_api_key(body.get("api_key") or "")
+                    config.clear_secret(name)
+                elif "token" in body or "api_key" in body:
+                    config.set_secret(name, body.get("token") or body.get("api_key") or "")
                 else:
                     self._json({"error": "nothing to change"}, 400)
                     return
@@ -2088,6 +2183,66 @@ class _Handler(BaseHTTPRequestHandler):
             "names": [Path(e.path).name for e in found],
         })
 
+    def _fetch(self, body: dict) -> None:
+        """List what a URL holds, then — only when told twice — download it.
+
+        Two steps on purpose: a dataset URL can name hundreds of files, and
+        nobody should discover that by pressing a button once.
+        """
+        try:
+            service, label, files = fetch.plan(body.get("url") or "", config.tokens())
+            into = fetch.destination(body.get("into"))
+        except fetch.FetchError as exc:
+            self._json({"error": str(exc)}, 400)
+            return
+
+        known = sum(f.size or 0 for f in files)
+        home = into / label
+        if not body.get("confirm"):
+            self._json({
+                "plan": True,
+                "service": service,
+                "label": label,
+                "count": len(files),
+                "bytes": known,
+                "names": [f.name for f in files[:12]],
+                "into": str(home),
+            })
+            return
+
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+            fetch.download(service, files, home, config.tokens())
+        except fetch.FetchError as exc:
+            self._json({"error": str(exc)}, 502)
+            return
+        except OSError as exc:
+            self._json({"error": f"could not store the download: {exc.strerror}"}, 500)
+            return
+
+        # The same path an uploaded file takes, so a URL and a drop cannot
+        # disagree about what counts as openable.
+        try:
+            found = scan([home], origin="opened")
+        except (ValueError, OSError) as exc:
+            self._json({"error": str(exc)}, 400)
+            return
+        if not found:
+            shutil.rmtree(home, ignore_errors=True)
+            self._json({"error": "nothing convertible was downloaded"}, 415)
+            return
+
+        with self.lock:
+            merged = corpus.merge(self.entries, found)
+            self.entries = merged
+            _Handler.entries = merged
+        corpus.save(merged)
+        self._json({
+            "added": len(found),
+            "keys": [e.key for e in found],
+            "into": str(home),
+        })
+
     def _trajectory(self, entry) -> dict | None:
         """The converted trajectory for an entry, from cache when it is there."""
         with self.lock:
@@ -2230,6 +2385,7 @@ class _Handler(BaseHTTPRequestHandler):
             ]
             payload = {
                 "ai": _ai_state(),
+                "downloads": str(fetch.destination(None)),
                 "sessions": library.decorate(rows),
                 "folders": library.folders(),
                 "tags": [{"name": t, "count": n} for t, n in library.tags()],

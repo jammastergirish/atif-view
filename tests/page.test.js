@@ -401,40 +401,6 @@ test("the switch itself stays visible when AI is off, so it can be turned back o
   assert.ok(on.includes("askin"), "the ask box should be shown when on");
 });
 
-test("the settings sheet never renders a key, only where one came from", () => {
-  const out = run(`
-    AI={available:true,source:"settings",hint:"\u20261234",model:"claude-opus-5"};
-    const el={textContent:""};
-    document.getElementById=()=>el;
-    showKeyState();
-    return el.textContent;`);
-  assert.match(out, /\u20261234/);
-  assert.match(out, /AI features are on/);
-  assert.ok(!/sk-ant/.test(out));
-});
-
-test("a saved key with no SDK reads as saved, not as a failed save", () => {
-  const out = run(`
-    AI={available:false,source:"settings",hint:"\u2026GQAA",
-        reason:"The anthropic package is not installed."};
-    const el={textContent:"",className:""};
-    document.getElementById=()=>el;
-    showKeyState();
-    return el.textContent;`);
-  assert.match(out, /Key saved here/);
-  assert.match(out, /anthropic package is not installed/);
-});
-
-test("an unconfigured viewer says so rather than showing a stale key", () => {
-  const out = run(`
-    AI={};
-    const el={textContent:""};
-    document.getElementById=()=>el;
-    showKeyState();
-    return el.textContent;`);
-  assert.match(out, /No key saved/);
-});
-
 test("an answer renders while it is still arriving", () => {
   const html = run(`
     CHAT=[{q:"why",a:"partly writ",steps:[],busy:true}];
@@ -670,46 +636,96 @@ test("a session with no annotations at all does not throw", () => {
   );
 });
 
-test("a saved key shows as dots in the field, with its tail", () => {
-  const out = run(`
-    AI={available:true,source:"settings",hint:"\u2026GQAA",model:"claude-opus-5"};
-    const box={placeholder:"",value:""};
-    document.getElementById=id=>id==="akey"?box:null;
-    showKeyState();
-    return box.placeholder;`);
-  assert.match(out, /^•+ \u2026GQAA$/, `unexpected placeholder: ${out}`);
+test("the sheet has a field for every credential the server can hold", () => {
+  const html = run(`
+    AI={secrets:{
+      anthropic:{label:"Anthropic API key",placeholder:"sk-ant-…",env:"ANTHROPIC_API_KEY",source:"",hint:""},
+      hf:{label:"Hugging Face token",placeholder:"hf_…",env:"HF_TOKEN",source:"",hint:""},
+      github:{label:"GitHub token",placeholder:"ghp_…",env:"GITHUB_TOKEN",source:"",hint:""}}};
+    const host={innerHTML:""};
+    document.getElementById=id=>id==="secrets"?host:null;
+    drawSecrets();
+    return host.innerHTML;`);
+  for (const label of ["Anthropic API key", "Hugging Face token", "GitHub token"]) {
+    assert.ok(html.includes(label), `no field for ${label}`);
+  }
+  assert.strictEqual(html.match(/class="secret"/g).length, 3);
 });
 
-test("the dots are a placeholder, so an untouched field submits nothing", () => {
-  const out = run(`
-    AI={available:true,source:"settings",hint:"\u2026GQAA"};
-    const box={placeholder:"",value:""};
-    document.getElementById=id=>id==="akey"?box:null;
-    showKeyState();
-    return box.value;`);
-  assert.strictEqual(out, "", "dots ended up in the value and could be saved");
+test("a saved token shows as dots with its tail, never as a value", () => {
+  const html = run(`
+    AI={secrets:{hf:{label:"Hugging Face token",placeholder:"hf_…",
+      env:"HF_TOKEN",source:"settings",hint:"\u2026GQAA"}}};
+    const host={innerHTML:""};
+    document.getElementById=id=>id==="secrets"?host:null;
+    drawSecrets();
+    return host.innerHTML;`);
+  assert.match(html, /placeholder="•+ \u2026GQAA"/);
+  assert.ok(!/value=/.test(html), "dots as a value could be submitted and stored");
 });
 
-test("a key from the environment says so rather than showing dots", () => {
-  const out = run(`
-    AI={available:true,source:"environment",hint:""};
-    const box={placeholder:"",value:""};
-    document.getElementById=id=>id==="akey"?box:null;
-    showKeyState();
-    return box.placeholder;`);
-  assert.match(out, /ANTHROPIC_API_KEY/);
-  assert.ok(!out.includes("•"), "dots suggest a key is saved here when it is not");
+test("a token from the environment names the variable rather than showing dots", () => {
+  const html = run(`
+    AI={secrets:{github:{label:"GitHub token",placeholder:"ghp_…",
+      env:"GITHUB_TOKEN",source:"environment",hint:""}}};
+    const host={innerHTML:""};
+    document.getElementById=id=>id==="secrets"?host:null;
+    drawSecrets();
+    return host.innerHTML;`);
+  assert.match(html, /Set by GITHUB_TOKEN/);
+  assert.ok(!html.includes("•"), "dots imply it was saved here and can be removed here");
 });
 
-test("no key at all leaves the field prompting for one", () => {
-  const out = run(`
-    AI={};
-    const box={placeholder:"",value:""};
-    document.getElementById=id=>id==="akey"?box:null;
-    showKeyState();
-    return box.placeholder;`);
-  assert.match(out, /sk-ant/);
-  assert.ok(!out.includes("•"));
+test("an unset token prompts for one", () => {
+  const html = run(`
+    AI={secrets:{hf:{label:"Hugging Face token",placeholder:"hf_…",
+      env:"HF_TOKEN",source:"",hint:""}}};
+    const host={innerHTML:""};
+    document.getElementById=id=>id==="secrets"?host:null;
+    drawSecrets();
+    return host.innerHTML;`);
+  assert.match(html, /placeholder="hf_…"/);
+});
+
+test("a label from the server is escaped, not rendered as markup", () => {
+  const html = run(`
+    AI={secrets:{x:{label:"<img src=x onerror=alert(1)>",placeholder:"p",
+      env:"E",source:"",hint:""}}};
+    const host={innerHTML:""};
+    document.getElementById=id=>id==="secrets"?host:null;
+    drawSecrets();
+    return host.innerHTML;`);
+  assert.ok(!html.includes("<img"), "a label was rendered as HTML");
+});
+
+test("a plan is shown before anything downloads", async () => {
+  const posted = [];
+  globalThis.__posted = posted;
+  const state = { textContent: "" }, button = { textContent: "" };
+  await run(`
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__posted.push(JSON.parse(opts.body));
+      return {ok:true,json:async()=>({plan:true,label:"owner--name",count:86,
+        bytes:4194304,into:"/tmp/downloads/owner--name",
+        names:["a.jsonl","b.jsonl","c.jsonl","d.jsonl"]})};
+    };
+    document.getElementById=id=>({urlin:{value:"https://huggingface.co/datasets/o/n"},
+      urlinto:{value:"/tmp/downloads"},
+      urlerr:{hidden:true},urlstate:globalThis.__state,urlgo:globalThis.__button})[id]||null;
+    return planUrl();`, (globalThis.__state = state), (globalThis.__button = button));
+  assert.strictEqual(posted.length, 1);
+  assert.ok(!posted[0].confirm, "downloaded without showing the plan first");
+  assert.strictEqual(posted[0].into, "/tmp/downloads", "the folder was not sent");
+  assert.match(state.textContent, /86 files in owner--name/);
+  assert.match(state.textContent, /4\.0 MB/);
+  assert.match(button.textContent, /Download 86/);
+});
+
+test("sizes read as KB, MB or GB", () => {
+  assert.strictEqual(run(`return bytes(2048);`), "2 KB");
+  assert.strictEqual(run(`return bytes(4*1024*1024);`), "4.0 MB");
+  assert.strictEqual(run(`return bytes(3*1024*1024*1024);`), "3.0 GB");
+  assert.strictEqual(run(`return bytes(10);`), "1 KB", "a tiny file should not read as 0 KB");
 });
 
 // ---- runner --------------------------------------------------------------------

@@ -536,7 +536,7 @@ def test_a_saved_key_with_no_sdk_says_which_piece_is_missing(server, monkeypatch
     """The failure that read as "the save didn't work": key stored, SDK absent."""
     from atif_view import ai, config
 
-    config.set_api_key("sk-ant-api03-" + "q" * 40)
+    config.set_secret("anthropic", "sk-ant-api03-" + "q" * 40)
     monkeypatch.setattr(
         ai, "_client", lambda: (_ for _ in ()).throw(ai.Unavailable("no anthropic package"))
     )
@@ -552,7 +552,7 @@ def test_ai_is_off_when_nothing_is_configured(server, monkeypatch):
 
     monkeypatch.setattr(ai, "_client", _raise_unavailable)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert config.api_key() is None
+    assert config.stored("anthropic") is None
     state = _index(server)["ai"]
     assert state["available"] is False and state["hint"] == ""
     assert state["reason"], "an unavailable state must say why"

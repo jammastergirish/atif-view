@@ -19,6 +19,28 @@ atif-view bundle.zip             # a bundle someone sent you
 atif-view --port 8080 --no-open
 ```
 
+**From URL…** in the top bar fetches straight from Hugging Face or GitHub: a
+whole repo, one folder inside it, or a single file — whichever the URL points
+at. Paste a dataset root and it takes everything convertible; paste
+`…/tree/main/some/folder` and it takes that folder only.
+
+Nothing downloads on the first press. The button lists what is there — how many
+files, how large, and where they will land — and downloads only when pressed
+again. Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
+launched, editable in the dialog, so a dataset you pull is somewhere you can
+actually reach rather than buried in a dot-directory. Because those files are
+yours rather than the viewer's, removing a session from the library forgets the
+entry without deleting them.
+
+Only `huggingface.co` and `github.com` (with their API and raw hosts) are
+fetched, and only over HTTPS. That is a deliberate limit rather than an
+oversight: the page hands a URL to a server running as you, on your network, so
+an unrestricted fetcher would be a way to reach your router, a cloud metadata
+endpoint, or something bound to localhost. A redirect off those hosts is refused
+rather than followed.
+
+Gated repositories need a token — see Settings below.
+
 Build the index first with `atif-make index`, or point the viewer at a file,
 directory or archive and it will scan that instead.
 
@@ -113,7 +135,10 @@ uv run --extra ai atif-view
 ```
 
 Then either export `ANTHROPIC_API_KEY`, or paste a key into **Settings** in the
-top bar. A key set in Settings is stored at `~/.atif/config.json`, mode `0600`
+top bar. Settings holds three credentials — an Anthropic key for the AI
+features, and Hugging Face and GitHub tokens for **From URL…** — each with the
+same treatment described here, and each falling back to its usual environment
+variable (`HF_TOKEN`, `GITHUB_TOKEN`) when nothing is stored. A key set in Settings is stored at `~/.atif/config.json`, mode `0600`
 inside a `0700` directory; it is sent to the Anthropic API and nowhere else, and
 is never read back into the page — the page only ever sees its last four
 characters. With a key saved, the field shows dots and that tail, so it is

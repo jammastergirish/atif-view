@@ -15,13 +15,19 @@ from atif_view.viewer import PAGE
 STYLE = PAGE[PAGE.index("<style>") + 7 : PAGE.index("</style>")]
 
 
+HEADER_CONTROLS = ("#theme", "#gear", "#open", "#fromurl")
+
+
 def test_the_header_controls_share_one_rule():
-    """Three copies of a box is how the settings button came to look different."""
-    match = re.search(r"^#theme,#gear,#open\{", STYLE, re.MULTILINE)
-    assert match, "the header controls no longer share a rule"
+    """Separate copies of a box is how the settings button came to look different."""
+    shared = re.search(r"^(#[\w,#-]+)\{[^}]*border-radius:8px", STYLE, re.MULTILINE)
+    assert shared, "no shared rule defines the header control box"
+    named = set(shared.group(1).split(","))
+    missing = [c for c in HEADER_CONTROLS if c not in named]
+    assert not missing, f"not in the shared rule, so they will drift: {missing}"
 
 
-@pytest.mark.parametrize("control", ["#theme", "#gear", "#open"])
+@pytest.mark.parametrize("control", HEADER_CONTROLS)
 def test_no_header_control_redefines_its_own_box(control):
     """A later rule of its own is exactly how one drifts away from the others."""
     own = re.findall(rf"^{re.escape(control)}\{{([^}}]*)\}}", STYLE, re.MULTILINE)

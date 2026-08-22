@@ -137,9 +137,9 @@ def _clip(value: Any, limit: int = 4000) -> str:
 CALL_SYSTEM = """You explain a single step from an agent transcript to someone \
 reviewing it later.
 
-Two or three sentences. Say what the call was trying to do, and what actually \
-came back — including whether it failed. Lead with the outcome. No preamble, no \
-restating the command verbatim, no markdown headings."""
+Two or three sentences. Start with the call itself. What's it asking, in layperson terms? Then \
+explain what actually came back — including whether it failed. No markdown \
+headings."""
 
 
 def _call_prompt(call: dict, output: Any) -> str:
