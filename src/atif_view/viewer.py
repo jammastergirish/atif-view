@@ -830,8 +830,8 @@ const bytes=n=>n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
   :`${Math.max(1,Math.round(n/1024))} KB`;
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],COLLECTIONS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
-    collection="__all",ACTIVE_TAGS={},ACTIVE_ORIGINS={},EDITING=null,
+let INDEX=[],GROUPS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
+    collection="__all",ACTIVE_TAGS={},EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
 
@@ -862,7 +862,7 @@ async function openFiles(files){
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
-  INDEX=fresh.sessions||[];COLLECTIONS=fresh.collections||[];TAGS=fresh.tags||[];AI=fresh.ai||{};DOWNLOADS=fresh.downloads||DOWNLOADS;
+  INDEX=fresh.sessions||[];GROUPS=fresh.groups||[];TAGS=fresh.tags||[];AI=fresh.ai||{};DOWNLOADS=fresh.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();
   if(first!==null)pick(first);
   if(problems.length)note(problems.join("\n"));
@@ -937,7 +937,7 @@ addEventListener("keydown",e=>{
 });
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
-  INDEX=d.sessions||[];COLLECTIONS=d.collections||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
+  INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
 });
 q.oninput=drawList;
@@ -952,33 +952,32 @@ function buildForest(folders){
 
 function visibleRails(){
   const counts={};
-  let unfiled=0;
   for(const e of INDEX){
-    if(!e.collection){unfiled++;continue}
-    // A session in Redwood/SOC2 counts toward Redwood too, as Diwan rolls up.
-    const parts=e.collection.split("/");
+    // A session under Local/Codex/x counts toward Local/Codex and Local too,
+    // as Diwan rolls up. A row without a group is not a crash.
+    if(!e.group)continue;
+    const parts=e.group.split("/");
     for(let i=1;i<=parts.length;i++){
       const p=parts.slice(0,i).join("/");
       counts[p]=(counts[p]||0)+1;
     }
   }
   const rows=[{path:"__all",name:"All",depth:0,count:INDEX.length}];
-  for(const n of buildForest(COLLECTIONS)){
+  for(const n of buildForest(GROUPS)){
     const parent=n.path.split("/").slice(0,-1).join("/");
     if(parent&&!EXPANDED[parent])continue;   // hidden under a collapsed parent
     rows.push({...n,count:counts[n.path]||0,
-      children:COLLECTIONS.some(f=>f.startsWith(n.path+"/")),
+      children:GROUPS.some(f=>f.startsWith(n.path+"/")),
       source:sourceOf(n.path)});
   }
-  rows.push({path:"__unfiled",name:"Unfiled",depth:0,count:unfiled});
   return rows;
 }
 
-/* Where a collection came from, if it was built by fetching a repository.
-   Any session in it knows; they all point at the same place. */
+/* Where a node came from, if it mirrors a repository folder. Any session under
+   it knows; they all point at the same place. */
 function sourceOf(path){
-  const member=INDEX.find(e=>e.source&&(e.collection===path
-    ||(e.collection||"").startsWith(path+"/")));
+  const member=INDEX.find(e=>e.source&&(e.group===path
+    ||(e.group||"").startsWith(path+"/")));
   if(!member)return "";
   // A nested collection mirrors a nested folder, so trim back to this level.
   const depth=(member.collection||"").split("/").length-path.split("/").length;
@@ -1004,10 +1003,8 @@ function drawList(){
           ${r.source?`<a class="rsrc" href="${esc(r.source)}" target="_blank"
             rel="noreferrer noopener" title="Open ${esc(r.source)}"
             onclick="event.stopPropagation()">↗</a>`:""}
-          <button title="Remove the collection, keep its sessions"
-            onclick="event.stopPropagation();dropCollection('${esc(r.path)}',false)">⌫</button>
-          <button title="Remove the sessions in it too" class="dang"
-            onclick="event.stopPropagation();dropCollection('${esc(r.path)}',true)">✕</button>
+          <button title="Remove these sessions from the library" class="dang"
+            onclick="event.stopPropagation();dropGroup('${esc(r.path)}')">✕</button>
         </span>`}
         <span class="rc">${r.count}</span></div>`;
   }).join("");
@@ -1016,9 +1013,7 @@ function drawList(){
     const on=!!ACTIVE_TAGS[t.name];
     return `<span class="pill tag${on?" on":""}" onclick="toggleTag('${esc(t.name)}')">
       ${esc(t.name)}<b>${t.count}</b></span>`;
-  }).join("")+ORIGINS.filter(o=>INDEX.some(e=>e.origin===o.key)).map(o=>
-    `<span class="pill origin${ACTIVE_ORIGINS[o.key]?" on":""}"
-       onclick="toggleOrigin('${o.key}')" title="${o.hint}">${o.label}</span>`).join("");
+  }).join("");
 }
 
 const setCollection=p=>{collection=p;cur=null;drawList();showLibrary()};
@@ -1042,21 +1037,27 @@ async function forget(key){
   }catch(e){note(e.message)}
 }
 
-async function dropCollection(name,withContents){
-  const inside=INDEX.filter(e=>e.collection===name||(e.collection||"").startsWith(name+"/")).length;
-  if(!confirm(withContents
-      ? `Remove ${inside} session${inside===1?"":"s"} in "${name}" from the library?`
-      : `Remove the collection "${name}"? Its ${inside} session${
-          inside===1?"":"s"} stay, unfiled.`))return;
+async function dropGroup(name){
+  const inside=INDEX.filter(e=>e.group===name||(e.group||"").startsWith(name+"/")).length;
+  if(!confirm(`Remove ${inside} session${inside===1?"":"s"} under "${name}" from the `
+    +`library? Files stay where they are, unless the viewer made the copy.`))return;
   try{
-    const res=await fetch(`/api/collection?name=${encodeURIComponent(name)}`
-      +(withContents?"&contents=1":""),{method:"DELETE"});
-    if(!res.ok)throw new Error("could not remove that collection");
+    const res=await fetch(`/api/group?name=${encodeURIComponent(name)}`,{method:"DELETE"});
+    if(!res.ok)throw new Error("could not remove those");
     if(collection===name||collection.startsWith(name+"/"))collection="__all";
     await refreshIndex();
     cur=null;showLibrary();
   }catch(e){note(e.message)}
 }
+
+/* Where a session came from. Three answers now that a URL download is not the
+   same act as opening a file off this machine. */
+const ORIGINS=[
+  {key:"scanned",label:"indexed",mark:"◆",hint:"Found on this machine"},
+  {key:"opened", label:"local",  mark:"↥",hint:"Opened from a file on this machine"},
+  {key:"fetched",label:"url",    mark:"↧",hint:"Fetched from a URL"},
+];
+const originOf=key=>ORIGINS.find(o=>o.key===key)||ORIGINS[0];
 
 function drawCrumb(){
   if(!crumb)return;
@@ -1071,25 +1072,12 @@ const toggleFolder=p=>{EXPANDED[p]=!EXPANDED[p];
   try{localStorage.setItem("atif-view.folders",JSON.stringify(EXPANDED))}catch(e){}
   drawList()};
 const toggleTag=t=>{ACTIVE_TAGS[t]=!ACTIVE_TAGS[t];drawList();if(!cur)showLibrary()};
-/* Where a session came from. Three answers now that a URL download is not the
-   same act as opening a file off this machine. */
-const ORIGINS=[
-  {key:"scanned",label:"indexed",mark:"◆",hint:"Found on this machine"},
-  {key:"opened", label:"local",  mark:"↥",hint:"Opened from a file on this machine"},
-  {key:"fetched",label:"url",    mark:"↧",hint:"Fetched from a URL"},
-];
-const originOf=key=>ORIGINS.find(o=>o.key===key)||ORIGINS[0];
-const toggleOrigin=k=>{ACTIVE_ORIGINS[k]=!ACTIVE_ORIGINS[k];drawList();if(!cur)showLibrary()};
-
 function libraryRows(){
   const f=q.value.toLowerCase();
   const active=Object.keys(ACTIVE_TAGS).filter(t=>ACTIVE_TAGS[t]);
   return INDEX.filter(e=>{
-    if(collection==="__unfiled"&&e.collection)return false;
-    if(collection!=="__all"&&collection!=="__unfiled"
-       &&!(e.collection===collection||e.collection.startsWith(collection+"/")))return false;
-    const wanted=ORIGINS.filter(o=>ACTIVE_ORIGINS[o.key]).map(o=>o.key);
-    if(wanted.length&&!wanted.includes(e.origin))return false;
+    if(collection!=="__all"
+       &&!(e.group===collection||e.group.startsWith(collection+"/")))return false;
     if(active.length&&!active.every(t=>(e.tags||[]).includes(t)))return false;
     if(f){
       const hay=(e.title||"")+" "+(e.project||"")+" "+(e.session_id||"")+" "
@@ -1118,7 +1106,7 @@ function showLibrary(){
   main.innerHTML=`
     <div class="lhead">
       <h2>${esc(collection==="__all"?"All sessions"
-        :collection==="__unfiled"?"Unfiled":collection)}</h2>
+        :collection)}</h2>
       <span class="mono">${num(rows.length)} of ${num(INDEX.length)}</span>
     </div>
     <div class="tgrid thead">
@@ -1150,7 +1138,6 @@ function libraryRow(e){
          onkeydown="tagKey(event,'${e.key}')" onblur="stopEdit()" autofocus>`:""}</span>
     <span class="acts">
       <button title="Rename" onclick="event.stopPropagation();startEdit('${e.key}','title')">✎</button>
-      <button title="File into…" onclick="event.stopPropagation();fileInto('${e.key}')">⊞</button>
       <button title="Tags" onclick="event.stopPropagation();startEdit('${e.key}','tags')">◌</button>
       <button title="Star" onclick="event.stopPropagation();star('${e.key}')">★</button>
       <button title="Remove from the library" class="dang"
@@ -1490,7 +1477,7 @@ async function annotate(key,fields){
 
 async function refreshIndex(){
   const d=await fetch("/api/index").then(r=>r.json());
-  INDEX=d.sessions||[];COLLECTIONS=d.collections||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
+  INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";
   drawList();
   if(!cur)showLibrary();
@@ -1523,13 +1510,6 @@ function tagKey(event,key){
 function star(key){
   const entry=INDEX.find(e=>e.key===key);
   annotate(key,{starred:!entry.starred});
-}
-
-function fileInto(key){
-  const entry=INDEX.find(e=>e.key===key);
-  const value=prompt("File into which collection?  (blank to unfile)",entry.collection||"");
-  if(value===null)return;
-  annotate(key,{folder:value});
 }
 
 function pick(key){
@@ -2045,28 +2025,62 @@ UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 # recognise one during a scan; a second constant here could drift from it.
 
 
-def _file_into_collections(found, home: Path, label: str, web: str = "") -> None:
-    """Put what arrived into a collection named after where it came from.
+def _groups(rows: list[dict]) -> list[str]:
+    """Every node of the tree, implied parents included, in reading order."""
+    seen: set[str] = set()
+    for row in rows:
+        parts = [p for p in row["group"].split("/") if p]
+        for depth in range(1, len(parts) + 1):
+            seen.add("/".join(parts[:depth]))
+    # Local before Remote, then alphabetically within each.
+    return sorted(seen, key=lambda path: (not path.startswith("Local"), path))
 
-    A repository's own folders are the organisation its author chose; adopting
-    it beats dropping two hundred unfiled rows on someone. Only a session with
-    no collection yet is touched, so this never overrides a decision.
+
+SITES = {"huggingface.co": "Hugging Face", "github.com": "GitHub"}
+AGENTS = {"claude-code": "Claude Code", "codex": "Codex", "copilot": "Copilot"}
+
+
+def _group(entry, source: str) -> str:
+    """Where a session belongs in the tree.
+
+    Derived, never stored. Collections were a second way to organise laid over
+    one that already existed — where a transcript came from — and the two could
+    disagree. This reads the truth instead: local sessions under the project
+    that produced them, remote ones under the repository they came from. Tags
+    remain for grouping that cuts across both.
     """
-    for entry in found:
-        record = library.get(entry.key)
-        if record.get("collection"):
-            continue
-        try:
-            inner = Path(entry.path).parent.relative_to(home)
-        except ValueError:
-            inner = Path()
-        # The download folder keeps owner--repo so two owners cannot collide on
-        # disk; a collection is read by a person, so it takes the repo name.
-        parts = [label.split("--")[-1], *(p for p in inner.parts if p not in (".", ""))]
-        # Where this came from on the web, so a collection built out of a
-        # repository can link back to the folder it mirrors.
-        source = f"{web}/{inner.as_posix()}".rstrip("/") if web else ""
-        library.update(entry.key, collection="/".join(parts), source=source)
+    if entry.origin == "fetched":
+        if not source:
+            return "Remote/Elsewhere"
+        parsed = urlparse(source)
+        site = SITES.get(parsed.netloc, parsed.netloc or "Elsewhere")
+        parts = [p for p in parsed.path.split("/") if p]
+        if parsed.netloc == "huggingface.co" and parts[:1] == ["datasets"]:
+            parts = parts[1:]
+        # <owner>/<repo>/tree/<rev>/<inner…>
+        inner = parts[4:] if len(parts) > 4 and parts[2:3] in (["tree"], ["blob"]) else []
+        return "/".join(["Remote", site, *parts[:2], *inner])
+
+    # Local mirrors Remote: the thing that produced it, then the unit of work.
+    agent = AGENTS.get(entry.agent, entry.agent or "Unknown")
+    if entry.origin == "opened":
+        return f"Local/Opened/{agent}"
+
+    # A project is a directory path; only its own name belongs in the tree, or
+    # every session would nest one node deep per directory above it.
+    project = Path(entry.project).name if entry.project else Path(entry.path).parent.name
+    return f"Local/{agent}/{project or 'Elsewhere'}"
+
+
+def _source_of(entry, home: Path, web: str) -> str:
+    """The page a fetched session was taken from, folder and all."""
+    if not web:
+        return ""
+    try:
+        inner = Path(entry.path).parent.relative_to(home).as_posix()
+    except ValueError:
+        inner = ""
+    return web if inner in (".", "") else f"{web}/{inner}"
 
 
 def _ai_state() -> dict:
@@ -2197,32 +2211,27 @@ class _Handler(BaseHTTPRequestHandler):
         corpus.save(self.entries)
         return removed
 
-    def _in_collection(self, name: str) -> set[str]:
-        """Keys filed under a collection, nested ones included."""
+    def _in_group(self, name: str) -> set[str]:
+        """Keys sitting under a node of the tree, nested ones included."""
         return {
             e.key
             for e in self.entries
-            if (inside := library.get(e.key).get("collection", ""))
-            and (inside == name or inside.startswith(f"{name}/"))
+            if (at := _group(e, library.get(e.key).get("source", "")))
+            and (at == name or at.startswith(f"{name}/"))
         }
 
     def do_DELETE(self) -> None:
         url = urlparse(self.path)
         query = parse_qs(url.query)
 
-        if url.path == "/api/collection":
+        if url.path == "/api/group":
             name = (query.get("name") or [""])[0]
             if not name:
-                self._json({"error": "a collection is required"}, 400)
+                self._json({"error": "a folder is required"}, 400)
                 return
-            keys = self._in_collection(name)
-            if (query.get("contents") or ["0"])[0] == "1":
-                self._json({"removed": self._forget(keys), "collection": name})
-                return
-            # The collection goes; what was in it does not.
-            for key in keys:
-                library.update(key, collection="")
-            self._json({"unfiled": len(keys), "collection": name})
+            # A node of the tree is a fact about where sessions came from, so it
+            # cannot be removed on its own — only what sits under it can.
+            self._json({"removed": self._forget(self._in_group(name)), "folder": name})
             return
 
         if url.path != "/api/library":
@@ -2505,7 +2514,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self.entries = merged
                 _Handler.entries = merged
             corpus.save(merged)
-            _file_into_collections(found, home, label, plan.web)
+            for entry in found:
+                library.update(entry.key, source=_source_of(entry, home, plan.web))
             yield {"t": "added", "added": len(found), "into": str(home)}
 
         self._frames(produce)
@@ -2647,6 +2657,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "modified": e.modified,
                     "size_bytes": e.size_bytes,
                     "subagents": e.subagents,
+                    "group": _group(e, library.get(e.key).get("source", "")),
                 }
                 for e in self.entries
                 # A downloaded folder the reader deleted, or a drive not mounted
@@ -2659,7 +2670,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "ai": _ai_state(),
                 "downloads": str(fetch.destination(None)),
                 "sessions": library.decorate(rows),
-                "collections": library.collections(),
+                "groups": _groups(rows),
                 "tags": [{"name": t, "count": n} for t, n in library.tags()],
             }
             self._send(json.dumps(payload).encode(), "application/json")

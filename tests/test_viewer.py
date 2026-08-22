@@ -358,7 +358,7 @@ def test_opened_files_are_marked_and_stored_outside_temp(server):
 def test_annotating_a_session_persists_and_comes_back_in_the_index(server):
     key = _first_key(server)
     status, record = _post_json(server + "/api/library", {
-        "key": key, "title": "SOC2 web app", "collection": "Redwood/SOC2",
+        "key": key, "title": "SOC2 web app",
         "tags": ["security", "needs-review"], "starred": True,
     })
     assert status == 200
@@ -368,8 +368,6 @@ def test_annotating_a_session_persists_and_comes_back_in_the_index(server):
     row = {r["key"]: r for r in index["sessions"]}[key]
     assert row["title"] == "SOC2 web app"
     assert row["tags"] == ["security", "needs-review"]
-    # The rail and filter bar are served alongside, already aggregated.
-    assert index["collections"] == ["Redwood", "Redwood/SOC2"]
     assert {t["name"]: t["count"] for t in index["tags"]} == {
         "security": 1, "needs-review": 1,
     }
@@ -840,34 +838,40 @@ def test_an_opened_copy_is_deleted_because_the_viewer_made_it(server):
     assert not path.exists(), "the viewer's own copy was left behind"
 
 
-def test_deleting_a_collection_keeps_what_was_in_it(server):
-    key = _first_key(server)
-    _try_post(server + "/api/library", {"key": key, "collection": "Work/Reviews"})
-    assert "Work/Reviews" in _index(server)["collections"]
 
-    status, payload = _delete(server + "/api/collection?name=Work")
-    assert status == 200 and payload["unfiled"] == 1
+
+def test_the_tree_is_derived_from_where_a_session_came_from(server):
+    """Local mirrors Remote: what produced it, then the unit of work."""
     rows = _sessions(server)
-    assert len(rows) == 1, "the session went with its collection"
-    assert rows[0]["collection"] == ""
-    assert "Work" not in _index(server)["collections"]
+    assert rows[0]["group"].startswith("Local/"), rows[0]["group"]
+    assert rows[0]["group"] in _index(server)["groups"]
 
 
-def test_deleting_a_collection_with_its_contents_removes_the_sessions(server):
+def test_every_node_of_the_tree_has_its_parents(server):
+    groups = _index(server)["groups"]
+    for node in groups:
+        parts = node.split("/")
+        for depth in range(1, len(parts)):
+            assert "/".join(parts[:depth]) in groups, f"{node} has no parent"
+
+
+def test_local_comes_before_remote(server):
+    groups = _index(server)["groups"]
+    locals_ = [i for i, g in enumerate(groups) if g.startswith("Local")]
+    remotes = [i for i, g in enumerate(groups) if g.startswith("Remote")]
+    if locals_ and remotes:
+        assert max(locals_) < min(remotes)
+
+
+def test_removing_a_node_removes_what_sits_under_it(server):
     key = _first_key(server)
-    _try_post(server + "/api/library", {"key": key, "collection": "Work/Reviews"})
-    status, payload = _delete(server + "/api/collection?name=Work&contents=1")
-    assert status == 200 and payload["removed"] == 1
-    assert not _sessions(server)
+    node = next(s["group"] for s in _sessions(server) if s["key"] == key)
+    top = node.split("/")[0]
+    status, payload = _delete(server + f"/api/group?name={top}")
+    assert status == 200 and payload["removed"] >= 1
+    assert not [s for s in _sessions(server) if s["key"] == key]
 
 
-def test_a_collection_takes_its_nested_ones_with_it(server):
-    key = _first_key(server)
-    _try_post(server + "/api/library", {"key": key, "collection": "A/B/C"})
-    status, payload = _delete(server + "/api/collection?name=A")
-    assert status == 200 and payload["unfiled"] == 1
-
-
-def test_a_collection_name_is_required(server):
-    status, payload = _delete(server + "/api/collection?name=")
-    assert status == 400 and "collection is required" in payload["error"]
+def test_a_node_name_is_required(server):
+    status, payload = _delete(server + "/api/group?name=")
+    assert status == 400 and "folder is required" in payload["error"]

@@ -1,6 +1,6 @@
 """What you decide about a transcript, as opposed to what it is.
 
-Titles, collections, tags and stars live here; paths, sizes and formats stay in
+Titles, tags and stars live here; paths, sizes and formats stay in
 atif-make's index. Keeping them apart means re-indexing can never destroy an
 annotation, and an annotation survives its file being re-scanned from somewhere
 new — records are keyed by content, so a file that moves keeps everything.
@@ -24,12 +24,8 @@ _lock = threading.Lock()
 
 _DEFAULTS: dict[str, Any] = {
     "title": "",
-    # A collection groups sessions in the library. Deliberately not called a
-    # folder: a folder is a directory on disk, and conflating the two made
-    # "which folder?" an ambiguous question.
-    "collection": "",
-    # Where a fetched session came from on the web, so a collection built out of
-    # a repository can link back to it.
+    # Where a fetched session came from on the web. This is what places it in
+    # the tree, and what the tree links back to.
     "source": "",
     "tags": [],
     "starred": False,
@@ -103,14 +99,6 @@ def _clean_steps(value: Any) -> list[str]:
     return out[:2000]
 
 
-def _clean_collection(value: Any) -> str:
-    """A '/'-nested path, with empty and stray segments dropped."""
-    if not isinstance(value, str):
-        return ""
-    parts = [p.strip() for p in value.split("/")]
-    return "/".join(p for p in parts if p)[:200]
-
-
 def update(key: str, path: Path | None = None, **fields: Any) -> dict:
     """Merge fields into one record and persist. Returns the merged record."""
     if not key:
@@ -132,8 +120,6 @@ def update(key: str, path: Path | None = None, **fields: Any) -> dict:
                     for k, v in (value or {}).items()
                     if isinstance(k, str) and isinstance(v, str)
                 } if isinstance(value, dict) else {}
-            elif name == "collection":
-                record["collection"] = _clean_collection(value)
             elif name in ("starred", "ai"):
                 record[name] = bool(value)
             else:
@@ -159,22 +145,6 @@ def remove(key: str, path: Path | None = None) -> bool:
         if existed:
             save(entries, path)
     return existed
-
-
-def collections(path: Path | None = None) -> list[str]:
-    """Every collection, including implied parents, sorted for a tree walk.
-
-    'Redwood/SOC2' implies 'Redwood' even when nothing is filed directly there,
-    or the tree would have a hole in it.
-    """
-    path = path or LIBRARY_PATH
-    found: set[str] = set()
-    for record in load(path).values():
-        collection = record.get("collection") or ""
-        parts = [p for p in collection.split("/") if p]
-        for depth in range(1, len(parts) + 1):
-            found.add("/".join(parts[:depth]))
-    return sorted(found)
 
 
 def tags(path: Path | None = None) -> list[tuple[str, int]]:

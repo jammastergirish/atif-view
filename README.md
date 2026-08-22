@@ -63,45 +63,40 @@ directory or archive and it will scan that instead.
 
 ## The library
 
-Sessions are organised, not just listed. Rename one, file it into a collection
-(nested with `/`), tag it across collections, star it. A **collection** groups
-sessions in the library; a **folder** is a directory on disk. They are kept
-distinct because conflating them made "which folder?" an ambiguous question.
+Sessions are organised by where they came from, and the tree is derived rather
+than filed by hand:
 
-Every session says where it came from — **indexed** from this machine, opened
-from a **local** file, or fetched from a **url** — and the filter bar narrows to
-any of the three.
+```
+Local                      Remote
+  Claude Code                Hugging Face
+    atif-view                  sleightbench
+    PaperParser                  SLEIGHT-Bench
+  Codex                            attacks/model_priors/…
+    …                        GitHub
+```
 
-Removing a session takes everything kept about it: its title, collection, tags,
-stars, starred steps and any cached AI summaries, all of which live in one
-record. Files are deleted only where they are the viewer's own copy under
+Both sides have the same shape: what produced the session, then the unit of work
+— a project on this machine, a repository on the web. There is no filing step
+and nothing lands unfiled, because the tree reads a fact rather than a decision.
+Collections were tried first and removed: a second way to organise laid over one
+that already existed, which the two could disagree about. **Tags** remain for
+grouping that cuts across the tree, and a session can still be renamed and
+starred.
+
+A remote node links back to the folder it mirrors.
+
+Removing a node removes the sessions under it — a node cannot be deleted on its
+own, since it describes where something came from rather than a choice anyone
+made. Removing a session takes everything kept about it: title, tags, stars,
+starred steps and any cached AI summaries, all of which live in one record.
+Files are deleted only where they are the viewer's own copy under
 `~/.atif/opened/`; a session found on this machine, or downloaded into a folder
-of yours, keeps its file. Removing a collection leaves its sessions unfiled, or
-takes them with it — the two are separate actions.
+of yours, keeps its file.
 
-A collection built by fetching a repository links back to the folder it
-mirrors. The collection rail on
-the left rolls counts up the tree; the filter bar narrows by tag, or to files
-you opened yourself.
-
-Annotations live in `~/.atif/library.json`, keyed by a hash of the file's
-content rather than its path — so a name survives the transcript moving, and a
-full re-index can never destroy one. What a transcript *is* stays in
-`atif-make`'s index; what you decided about it stays here.
-
-Files you open are copied into `~/.atif/opened/`, so they outlast the viewer and
-can be organised like anything else. Deleting one removes its copy; deleting a
-scanned session only forgets the annotation, never the transcript.
-
-**Reading output.** Tool arguments and any JSON result are syntax-coloured; the
-`Raw` tab pretty-prints and colours the source through the same renderer, so a
-log reads the same there as it does in a step. Shell output is coloured for the
-three things it gets scanned for — what changed, what failed, what passed —
-measured against a real corpus rather than tinting every line.
-
-**Provenance is recorded, not applied.** A transcript you opened carries a quiet
-tray mark — never a tag pill, because that is a label *you* chose and this is a
-fact about where the file came from.
+Claude Code names a session's directory by replacing every `/` in the working
+directory with `-`, which cannot be undone by reading the string: `atif-make`
+and `atif/make` escape identically. The path is rebuilt by asking the filesystem
+which one exists, so a project appears under its real name.
 
 ## Asking Claude about a transcript
 
