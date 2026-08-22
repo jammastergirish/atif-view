@@ -64,9 +64,9 @@ are understood well enough to list a repository; every other host is a link to
 one file.
 
 `s3://bucket/prefix` works too, read through the **aws CLI** rather than a
-library. Archives are fetched as readily as loose logs and unpacked on arrival,
-because a bucket of agent runs is far more likely to hold one zip per session
-than bare JSONL — and what comes out of an archive is placed in the tree by
+library. Archives are fetched as readily as loose logs and unpacked on arrival — a
+folder of them read off this machine works the same way — because a bucket of
+agent runs is far more likely to hold one zip per session than bare JSONL — and what comes out of an archive is placed in the tree by
 where the archive came from, not by whatever the archive calls its own folders. That is deliberate: the CLI already owns the SSO session, the profile
 configuration and the refresh logic, so shelling out to it means this never
 holds an AWS credential and never has to renew one. Sign in yourself —

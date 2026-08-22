@@ -712,13 +712,6 @@ test("a label from the server is escaped, not rendered as markup", () => {
   assert.ok(!html.includes("<img"), "a label was rendered as HTML");
 });
 
-test("sizes read as KB, MB or GB", () => {
-  assert.strictEqual(run(`return bytes(2048);`), "2 KB");
-  assert.strictEqual(run(`return bytes(4*1024*1024);`), "4.0 MB");
-  assert.strictEqual(run(`return bytes(3*1024*1024*1024);`), "3.0 GB");
-  assert.strictEqual(run(`return bytes(10);`), "1 KB", "a tiny file should not read as 0 KB");
-});
-
 test("the download reports progress as files land", () => {
   const bar = { hidden: true }, fill = { style: {} }, state = { textContent: "" },
         button = { textContent: "" };
@@ -1153,9 +1146,20 @@ test("select all ticks the top level, select none clears it", () => {
   assert.deepStrictEqual(out, [["a", "b"], []]);
 });
 
-test("zero bytes reads as zero, not as one kilobyte", () => {
-  assert.strictEqual(run(`return bytes(0);`), "0 KB");
-  assert.strictEqual(run(`return bytes(10);`), "1 KB");
+test("a size is shown in a unit that suits it", () => {
+  const got = run(`return [0,1,900,1023,1024,1536,687642,3641000000,154618822656]
+    .map(bytes);`);
+  assert.deepStrictEqual(got, [
+    "0 B", "1 B", "900 B", "1023 B", "1.0 KB", "1.5 KB",
+    "672 KB", "3.4 GB", "144 GB",
+  ]);
+});
+
+test("one formatter is used, not a division scattered about", () => {
+  const html = run(`
+    return libraryRow({key:"k",title:"t",agent:"a",modified:"2026-01-01",
+      size_bytes:900,tags:[],group:"Local"});`);
+  assert.match(html, /900 B/, "a small file was rounded away as MB");
 });
 
 test("the examples are rendered, not printed as template source", () => {

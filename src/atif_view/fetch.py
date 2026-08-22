@@ -611,6 +611,44 @@ def _rebase(url: str, paths: list[str]) -> set[str]:
     }
 
 
+def _s3_under(url: str, paths: set[str], profile: str) -> tuple[list[Remote], bool]:
+    """Every object beneath the ticked paths, and whether a listing was capped.
+
+    Listed per ticked path rather than filtered out of a listing of the whole
+    location. The bucket this was built for holds 118,801 objects and a listing
+    is capped, so anything alphabetically past the cap — "screwtape" is, "chippy"
+    is not — was simply absent and a selection resolved to nothing.
+    """
+    bucket, _, base = url[len("s3://") :].strip("/").partition("/")
+    if not S3_BUCKET.match(bucket):
+        raise FetchError(f"{bucket!r} is not a valid S3 bucket name.")
+
+    cut = len(base.rstrip("/")) + 1 if base else 0
+    found: dict[str, Remote] = {}
+    capped = False
+    for path in sorted(paths):
+        prefix = "/".join(p for p in (base, path) if p)
+        if not S3_PREFIX.match(prefix):
+            raise FetchError("That prefix has characters this will not pass on.")
+        args = ["s3api", "list-objects-v2", "--bucket", bucket,
+                "--max-items", str(MAX_FILES + 1)]
+        if prefix:
+            args += ["--prefix", prefix]
+        rows = json.loads(_aws(args, profile) or "{}").get("Contents", [])
+        capped = capped or len(rows) > MAX_FILES
+        for row in rows:
+            key = str(row.get("Key", ""))
+            if not key.endswith(SUFFIXES):
+                continue
+            # A ticked folder and a ticked file inside it must not count twice.
+            found[key] = Remote(
+                name=key[cut:] or Path(key).name,
+                url=f"s3://{bucket}/{key}",
+                size=row.get("Size"),
+            )
+    return list(found.values()), capped
+
+
 def measure(url: str, paths: list[str], tokens: dict[str, str | None]) -> dict:
     """Exactly how much a selection is, by listing inside what was ticked.
 
@@ -623,26 +661,14 @@ def measure(url: str, paths: list[str], tokens: dict[str, str | None]) -> dict:
         return {"files": 0, "bytes": 0, "capped": False}
 
     if url.startswith("s3://"):
-        profile = resolve_profile(tokens.get("aws") or "")
-        bucket, _, base = url[len("s3://") :].strip("/").partition("/")
-        if not S3_BUCKET.match(bucket):
-            raise FetchError(f"{bucket!r} is not a valid S3 bucket name.")
-        files = bytes_ = 0
-        capped = False
-        for path in sorted(wanted):
-            prefix = "/".join(p for p in (base, path) if p)
-            if not S3_PREFIX.match(prefix):
-                raise FetchError("That prefix has characters this will not pass on.")
-            args = ["s3api", "list-objects-v2", "--bucket", bucket,
-                    "--max-items", str(MAX_FILES + 1)]
-            if prefix:
-                args += ["--prefix", prefix]
-            rows = json.loads(_aws(args, profile) or "{}").get("Contents", [])
-            keep = [r for r in rows if str(r.get("Key", "")).endswith(SUFFIXES)]
-            files += len(keep)
-            bytes_ += sum(r.get("Size") or 0 for r in keep)
-            capped = capped or len(rows) > MAX_FILES
-        return {"files": files, "bytes": bytes_, "capped": capped}
+        found, capped = _s3_under(
+            url, wanted, resolve_profile(tokens.get("aws") or "")
+        )
+        return {
+            "files": len(found),
+            "bytes": sum(f.size or 0 for f in found),
+            "capped": capped,
+        }
 
     whole = plan(url, tokens, sized=False)
     against = _rebase(url, list(wanted))
@@ -661,8 +687,18 @@ def select(url: str, paths: list[str], tokens: dict[str, str | None]) -> Plan:
     rather than in the page: the page would have to walk the remote to find out
     what it had just agreed to, which is the work this avoids.
     """
-    if not [p for p in paths if p and p.strip("/")]:
+    picked = {p.strip("/") for p in paths if p and p.strip("/")}
+    if not picked:
         raise FetchError("Nothing was ticked.")
+
+    if url.startswith("s3://"):
+        bucket = url[len("s3://") :].strip("/").partition("/")[0]
+        found, _ = _s3_under(url, picked, resolve_profile(tokens.get("aws") or ""))
+        base = url[len("s3://") :].strip("/").partition("/")[2]
+        return _sized(
+            Plan("s3", bucket, found, f"s3://{bucket}/{base}".rstrip("/"))
+        )
+
     whole = plan(url, tokens, sized=False)
     wanted = _rebase(url, paths)
     chosen = [f for f in whole.files if _under(f.name, wanted)]

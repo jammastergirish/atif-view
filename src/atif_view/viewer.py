@@ -845,10 +845,17 @@ function pre(content) {
 
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num=n=>(n??0).toLocaleString();
-const bytes=n=>!n?"0 KB"
-  :n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
-  :n>=1024**2?`${(n/1024**2).toFixed(1)} MB`
-  :`${Math.max(1,Math.round(n/1024))} KB`;
+/* One size formatter. Everything used to divide by 1048576 and say MB, so a
+   900-byte log read as "0.0 MB" and a 144 GB bucket as "147456.0 MB". Each step
+   keeps three significant figures, which is as much as anyone reads. */
+const UNITS=["B","KB","MB","GB","TB"];
+function bytes(n){
+  n=Number(n)||0;
+  if(n<1024)return `${Math.round(n)} B`;
+  let step=0;
+  while(n>=1024&&step<UNITS.length-1){n/=1024;step++}
+  return `${n<10?n.toFixed(1):Math.round(n)} ${UNITS[step]}`;
+}
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
 let INDEX=[],GROUPS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
@@ -1216,7 +1223,7 @@ function libraryRow(e){
     <span class="tcell">${title}</span>
     <span class="mono">${esc(e.agent)}</span>
     <span class="mono">${e.modified?e.modified.slice(0,10):"—"}</span>
-    <span class="mono">${(e.size_bytes/1048576).toFixed(1)} MB</span>
+    <span class="mono">${bytes(e.size_bytes)}</span>
     <span class="tcell tags">${(e.tags||[]).map(t=>`<span class="pill tag">${esc(t)}</span>`).join("")}
       ${editing==="tags"?`<input class="inline tagin" placeholder="add tag"
          onkeydown="tagKey(event,'${e.key}')" onblur="stopEdit()" autofocus>`:""}</span>
@@ -2086,7 +2093,7 @@ function details(t,e){
     ["Agent",esc([t.agent?.name,t.agent?.version].filter(Boolean).join(" "))],
     ["Model",esc(t.agent?.model_name)],
     ["Session",esc(t.session_id)],
-    ["Size",e.size_bytes?(e.size_bytes/1048576).toFixed(1)+" MB":""],
+    ["Size",e.size_bytes?bytes(e.size_bytes):""],
     // The path is the one value worth acting on, so it reveals in the file
     // manager through the same helper the prose linkifier uses.
     ["Path",e.path?pathAnchor(e.path,esc(e.path)):""],
@@ -2100,8 +2107,8 @@ function panelTab(){
   const d=extra&&extra[tab];
   if(!d)return `<div class="empty">Loading…</div>`;
   if(tab==="raw"){
-    return `<div class="rawmeta">${esc(d.path)} · ${(d.size/1048576).toFixed(2)} MB${
-      d.truncated?` · showing the first ${(RAW_KB)} KB`:""}</div>
+    return `<div class="rawmeta">${esc(d.path)} · ${bytes(d.size)}${
+      d.truncated?` · showing the first ${bytes(RAW_KB*1024)}`:""}</div>
       ${rawSource(d.text).html}`;
   }
   if(!d.length)return `<div class="empty">No associated files.</div>`;

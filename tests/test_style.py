@@ -99,3 +99,16 @@ def test_no_template_expression_is_left_in_the_static_markup():
 
     markup = PAGE[: PAGE.index("<script>")]
     assert "${" not in markup, "a JS template expression is sitting in static HTML"
+
+
+def test_sizes_go_through_one_formatter():
+    """Every place used to divide by 1048576 and say MB, so a 900-byte log read
+    as "0.0 MB" and a 144 GB bucket as "147456.0 MB"."""
+    from atif_view.viewer import PAGE
+
+    script = PAGE[PAGE.index("<script>") : PAGE.rindex("</script>")]
+    code = "\n".join(
+        line for line in script.splitlines() if not line.strip().startswith(("/*", "*", "//"))
+    )
+    assert "1048576" not in code, "a size is still being divided by hand"
+    assert code.count("function bytes(") == 1
