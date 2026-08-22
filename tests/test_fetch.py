@@ -616,3 +616,91 @@ def test_a_web_repository_is_told_to_use_a_subdirectory_instead(monkeypatch):
     ]})
     with pytest.raises(fetch.FetchError, match="Point at a subdirectory"):
         fetch.plan("https://huggingface.co/datasets/owner/name", {})
+
+
+# ---- browsing a level at a time ----------------------------------------------------
+
+
+def test_s3_browsing_returns_folders_and_files(monkeypatch):
+    """A delimiter listing is what makes a 118,801-object bucket browsable."""
+    seen = _aws_stub(monkeypatch, stdout=json.dumps({
+        "CommonPrefixes": [{"Prefix": "chippy/abc/"}, {"Prefix": "chippy/def/"}],
+        "Contents": [
+            {"Key": "chippy/loose.zip", "Size": 40},
+            {"Key": "chippy/readme.md", "Size": 2},
+        ],
+    }))
+    nodes = fetch.browse("s3://bucket", "chippy", {"aws": "rw-eng"})
+    assert "--delimiter" in seen["command"]
+    assert [(n.kind, n.name) for n in nodes] == [
+        ("folder", "abc"), ("folder", "def"), ("file", "loose.zip"),
+    ]
+    assert [n.path for n in nodes][0] == "chippy/abc"
+
+
+def test_browsing_a_single_file_url_says_there_is_nothing_inside():
+    with pytest.raises(fetch.FetchError, match="nothing to look inside"):
+        fetch.browse("https://example.com/a.jsonl", "", {})
+
+
+def test_github_browsing_reads_one_level(monkeypatch):
+    _stub(monkeypatch, {"contents": [
+        {"type": "dir", "path": "logs/inner", "size": 0},
+        {"type": "file", "path": "logs/a.jsonl", "size": 12},
+        {"type": "file", "path": "logs/notes.md", "size": 3},
+    ]})
+    nodes = fetch.browse("https://github.com/owner/name/tree/main/logs", "", {})
+    assert [(n.kind, n.name) for n in nodes] == [("folder", "inner"), ("file", "a.jsonl")]
+
+
+def test_hf_browsing_reads_one_level(monkeypatch):
+    _stub(monkeypatch, {"api/datasets": [
+        {"type": "directory", "path": "attacks", "size": 0},
+        {"type": "file", "path": "manifest.json", "size": 9},
+    ]})
+    nodes = fetch.browse("https://huggingface.co/datasets/owner/name", "", {})
+    assert [(n.kind, n.name) for n in nodes] == [
+        ("folder", "attacks"), ("file", "manifest.json"),
+    ]
+
+
+# ---- downloading only what was ticked ----------------------------------------------
+
+
+def test_a_ticked_folder_means_everything_under_it(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [
+        {"Key": "chippy/abc/one.zip", "Size": 1},
+        {"Key": "chippy/abc/two.zip", "Size": 2},
+        {"Key": "chippy/def/three.zip", "Size": 3},
+    ]}))
+    plan = fetch.select("s3://bucket", ["chippy/abc"], {"aws": "rw-eng"})
+    assert [f.name for f in plan.files] == ["chippy/abc/one.zip", "chippy/abc/two.zip"]
+
+
+def test_a_ticked_file_brings_only_itself(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [
+        {"Key": "a/one.zip", "Size": 1},
+        {"Key": "a/two.zip", "Size": 2},
+    ]}))
+    plan = fetch.select("s3://bucket", ["a/two.zip"], {"aws": "rw-eng"})
+    assert [f.name for f in plan.files] == ["a/two.zip"]
+
+
+def test_ticking_nothing_is_refused(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [{"Key": "a.zip", "Size": 1}]}))
+    with pytest.raises(fetch.FetchError, match="Nothing was ticked"):
+        fetch.select("s3://bucket", [], {})
+
+
+def test_a_selection_is_still_held_to_the_limits(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": [
+        {"Key": f"a/{i}.zip", "Size": fetch.MAX_TOTAL_BYTES} for i in range(3)
+    ]}))
+    with pytest.raises(fetch.FetchError, match="over the"):
+        fetch.select("s3://bucket", ["a"], {})
+
+
+def test_a_prefix_name_cannot_be_smuggled_past_the_pattern(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": []}))
+    with pytest.raises(fetch.FetchError, match="will not pass to the CLI"):
+        fetch.browse("s3://bucket", "a$(whoami)", {})

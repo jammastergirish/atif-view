@@ -712,28 +712,6 @@ test("a label from the server is escaped, not rendered as markup", () => {
   assert.ok(!html.includes("<img"), "a label was rendered as HTML");
 });
 
-test("a plan is shown before anything downloads", async () => {
-  const posted = [];
-  globalThis.__posted = posted;
-  const state = { textContent: "" }, button = { textContent: "" };
-  await run(`
-    globalThis.fetch=async(url,opts)=>{
-      globalThis.__posted.push(JSON.parse(opts.body));
-      return {ok:true,json:async()=>({plan:true,label:"owner--name",count:86,
-        bytes:4194304,into:"/tmp/downloads/owner--name",
-        names:["a.jsonl","b.jsonl","c.jsonl","d.jsonl"]})};
-    };
-    document.getElementById=id=>({urlin:{value:"https://huggingface.co/datasets/o/n"},
-      urlerr:{hidden:true},urlstate:globalThis.__state,urlgo:globalThis.__button})[id]||null;
-    return planUrl();`, (globalThis.__state = state), (globalThis.__button = button));
-  assert.strictEqual(posted.length, 1);
-  assert.ok(!posted[0].confirm, "downloaded without showing the plan first");
-  assert.ok(!("into" in posted[0]), "a destination was sent; there is only one now");
-  assert.match(state.textContent, /86 files in owner--name/);
-  assert.match(state.textContent, /4\.0 MB/);
-  assert.match(button.textContent, /Download 86/);
-});
-
 test("sizes read as KB, MB or GB", () => {
   assert.strictEqual(run(`return bytes(2048);`), "2 KB");
   assert.strictEqual(run(`return bytes(4*1024*1024);`), "4.0 MB");
@@ -982,6 +960,112 @@ test("an s3 source is shown but not linked, having no page to open", () => {
     drawList();
     return el.innerHTML;`);
   assert.ok(!html.includes('href="s3://'), "an s3 URI was made into a link");
+});
+
+test("a single file is confirmed, not browsed", async () => {
+  const calls = [];
+  globalThis.__calls = calls;
+  const fields = {
+    urlin: { value: "https://example.com/a.jsonl" }, urlerr: { hidden: true },
+    urlstate: { textContent: "" }, urlgo: { textContent: "" }, tree: { hidden: true, innerHTML: "" },
+  };
+  globalThis.__fields = fields;
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.__calls.length=0;
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__calls.push(url);
+      return {ok:true,json:async()=>({plan:true,label:"example.com",count:1,
+        bytes:2048,into:"/tmp/x",names:["a.jsonl"]})};
+    };
+    return planUrl();`);
+  assert.deepStrictEqual(calls, ["/api/fetch"], "a lone file should not be browsed");
+  assert.match(fields.urlstate.textContent, /1 file/);
+});
+
+test("more than one file opens a picker instead of asking for a number", async () => {
+  const calls = [];
+  globalThis.__calls = calls;
+  const fields = {
+    urlin: { value: "s3://bucket" }, urlerr: { hidden: true },
+    urlstate: { textContent: "" }, urlgo: { textContent: "" },
+    tree: { hidden: true, innerHTML: "" },
+  };
+  globalThis.__fields = fields;
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.__calls.length=0;
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__calls.push(url);
+      if(url==="/api/browse")return {ok:true,json:async()=>({nodes:[
+        {name:"chippy",path:"chippy",kind:"folder",size:null},
+        {name:"one.jsonl",path:"one.jsonl",kind:"file",size:4096}]})};
+      return {ok:true,json:async()=>({plan:true,label:"bucket",count:9,bytes:99,
+        into:"/tmp/x",names:[]})};
+    };
+    return planUrl();`);
+  assert.deepStrictEqual(calls, ["/api/fetch", "/api/browse"]);
+  assert.strictEqual(fields.tree.hidden, false, "the picker stayed hidden");
+  assert.match(fields.tree.innerHTML, /chippy/);
+  assert.match(fields.tree.innerHTML, /one\.jsonl/);
+});
+
+test("ticking a folder covers what is inside it", () => {
+  const out = run(`
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set()};
+    pickNode("chippy");
+    return [isPicked("chippy"),isPicked("chippy/abc/x.zip"),isPicked("other")];`);
+  assert.deepStrictEqual(out, [true, true, false]);
+});
+
+test("ticking a folder drops the redundant ticks inside it", () => {
+  const out = run(`
+    TREE={url:"s3://b",open:{},nodes:{},picked:new Set(),busy:new Set()};
+    pickNode("chippy/abc");
+    pickNode("chippy");
+    return [...TREE.picked];`);
+  assert.deepStrictEqual(out, ["chippy"], "a nested tick outlived its parent");
+});
+
+test("the total counts what has been listed", () => {
+  const out = run(`
+    TREE={url:"s3://b",open:{},nodes:{
+      "":[{name:"a",path:"a",kind:"folder",size:null}],
+      "a":[{name:"x.zip",path:"a/x.zip",kind:"file",size:1024},
+           {name:"y.zip",path:"a/y.zip",kind:"file",size:2048}]},
+      picked:new Set(["a"]),busy:new Set()};
+    return picked();`);
+  assert.deepStrictEqual(out, { files: 2, bytes: 3072, unknown: false });
+});
+
+test("an unopened folder is counted as more, not as nothing", () => {
+  const out = run(`
+    TREE={url:"s3://b",open:{},nodes:{
+      "":[{name:"a",path:"a",kind:"folder",size:null}]},
+      picked:new Set(["a"]),busy:new Set()};
+    return picked();`);
+  assert.strictEqual(out.unknown, true, "a folder nobody opened was counted as empty");
+  assert.strictEqual(out.files, 0);
+});
+
+test("a ticked file is counted from its parent listing", () => {
+  const out = run(`
+    TREE={url:"s3://b",open:{},nodes:{
+      "a":[{name:"x.zip",path:"a/x.zip",kind:"file",size:5000}]},
+      picked:new Set(["a/x.zip"]),busy:new Set()};
+    return picked();`);
+  assert.deepStrictEqual(out, { files: 1, bytes: 5000, unknown: false });
+});
+
+test("the profile is a chooser only when there is a choice", () => {
+  const one = run(`AI={aws_profiles:["rw-eng"],aws_profile:""};return awsField();`);
+  assert.ok(!one.includes("<select"), "asked to choose between one thing");
+  assert.match(one, /nothing to set here/);
+
+  const many = run(`AI={aws_profiles:["a","b"],aws_profile:"b"};return awsField();`);
+  assert.match(many, /<select/);
+  assert.match(many, /value="b" selected/);
+  assert.match(many, /pick the one to use/);
 });
 
 // ---- runner --------------------------------------------------------------------

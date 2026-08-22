@@ -215,6 +215,18 @@ body.hide-side #main{padding-left:52px}
   border-radius:5px;padding:7px 16px;font:inherit;font-size:12.5px;cursor:pointer;
   margin:0 3px}
 .blank button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+#tree{max-height:38vh;overflow:auto;border:1px solid var(--line);border-radius:7px;
+  margin-top:9px;padding:5px 0;background:var(--surface)}
+#tree[hidden]{display:none}
+.tnode{display:flex;align-items:center;gap:6px;padding:2px 10px;font-size:12.5px}
+.tnode:hover{background:var(--sunk)}
+.tnode input{accent-color:var(--accent);margin:0;flex:none}
+.tcar{width:10px;flex:none;color:var(--muted);font-size:9px;cursor:pointer;
+  transition:transform .12s;display:inline-block}
+.tcar.open{transform:rotate(90deg)}
+.tname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  cursor:default}
+.tsize{font:500 10px var(--font-mono);color:var(--muted);flex:none}
 #urlbar{height:4px;border-radius:2px;background:var(--sunk);overflow:hidden;margin-top:11px}
 #urlbar[hidden]{display:none}
 #urlfill{height:100%;width:0;background:var(--accent);border-radius:2px;
@@ -487,6 +499,7 @@ pre.json{line-height:1.45}
              placeholder="https://huggingface.co/… · https://github.com/… · s3://bucket/prefix"
              onkeydown="if(event.key==='Enter')planUrl()">
       <div id="urlbar" hidden><div id="urlfill"></div></div>
+      <div id="tree" hidden></div>
       <p class="fine" id="urlstate"></p>
       <div class="row">
         <button class="primary" id="urlgo" onclick="planUrl()">Look</button>
@@ -1256,16 +1269,34 @@ function drawSecrets(){
         <button onclick="clearSecret('${name}')">Remove</button>
       </div>
     </div>`;
-  }).join("")+`<div class="secret">
+  }).join("")+awsField();
+}
+
+/* Only worth asking when there is a choice: with one profile configured there
+   is nothing to disambiguate, and the CLI is asked for the list rather than the
+   reader. */
+function awsField(){
+  const known=AI.aws_profiles||[];
+  const chosen=AI.aws_profile||"";
+  const choice=known.length>1
+    ? `<select id="awsprofile" onchange="saveProfile()">
+         <option value=""${chosen?"":" selected"}>Choose…</option>
+         ${known.map(p=>`<option value="${esc(p)}"${p===chosen?" selected":""}>${esc(p)}</option>`).join("")}
+       </select>`
+    : `<input id="awsprofile" spellcheck="false" autocomplete="off"
+         placeholder="${known.length?esc(known[0])+" (the only one)":"none configured"}"
+         value="${esc(chosen)}" onkeydown="if(event.key==='Enter')saveProfile()">`;
+  return `<div class="secret">
     <label for="awsprofile">AWS profile</label>
-    <input id="awsprofile" spellcheck="false" autocomplete="off"
-      placeholder="default" value="${esc(AI.aws_profile||"")}"
-      onkeydown="if(event.key==='Enter')saveProfile()">
-    <p class="fine">A name, not a credential. S3 is read by running the aws CLI,
-       which holds the session — so sign in with
-       <code>aws sso login --profile &lt;name&gt;</code> in a terminal, and this
-       reuses it.</p>
-    <div class="row"><button class="primary" onclick="saveProfile()">Save</button></div>
+    ${choice}
+    <p class="fine">A name, not a credential — S3 is read by running the aws CLI,
+       which holds the session. Sign in with
+       <code>aws sso login --profile &lt;name&gt;</code> in a terminal.
+       ${known.length>1
+         ? "This machine has several profiles, so pick the one to use."
+         : "With one profile configured there is nothing to set here."}</p>
+    ${known.length>1?"":`<div class="row">
+      <button class="primary" onclick="saveProfile()">Save</button></div>`}
   </div>`;
 }
 
@@ -1292,10 +1323,117 @@ const clearSecret=name=>settings({name,clear:true});
    files, and nobody should find that out by pressing a button once. */
 let PLANNED=null;
 
+/* What a browsed location holds, filled in a level at a time, and what has been
+   ticked. Paths are as the remote spells them, so they can go straight back. */
+let TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set()};
+
+const isPicked=path=>TREE.picked.has(path)
+  ||[...TREE.picked].some(p=>path.startsWith(p+"/"));
+
+async function openNode(path){
+  if(TREE.nodes[path]||TREE.busy.has(path))return;
+  TREE.busy.add(path);
+  drawTree();
+  try{
+    const {nodes}=await postJSON("/api/browse",{url:TREE.url,path});
+    TREE.nodes[path]=nodes;
+  }catch(e){
+    TREE.nodes[path]=[];
+    note(e.message);
+  }finally{
+    TREE.busy.delete(path);
+    drawTree();
+  }
+}
+
+function toggleNode(path){
+  if(TREE.open[path]){delete TREE.open[path];drawTree();return}
+  TREE.open[path]=true;
+  openNode(path);
+}
+
+function pickNode(path){
+  if(TREE.picked.has(path))TREE.picked.delete(path);
+  else{
+    // Ticking a folder covers what is inside it, so drop the redundant ticks.
+    for(const p of [...TREE.picked])if(p.startsWith(path+"/"))TREE.picked.delete(p);
+    TREE.picked.add(path);
+  }
+  drawTree();
+}
+
+/* Only what has been listed can be counted, so the total is honest about being
+   a floor when a ticked folder has not been opened. */
+function picked(){
+  let files=0,bytes=0,unknown=false;
+  const walk=path=>{
+    const nodes=TREE.nodes[path];
+    if(!nodes){unknown=true;return}
+    for(const n of nodes){
+      if(n.kind==="folder")walk(n.path);
+      else{files++;bytes+=n.size||0}
+    }
+  };
+  for(const path of TREE.picked){
+    const nodes=TREE.nodes[path];
+    if(nodes===undefined){
+      const parent=path.split("/").slice(0,-1).join("/");
+      const known=(TREE.nodes[parent]||[]).find(n=>n.path===path);
+      if(known&&known.kind==="file"){files++;bytes+=known.size||0;continue}
+      unknown=true;
+      continue;
+    }
+    walk(path);
+  }
+  return {files,bytes,unknown};
+}
+
+function drawTree(){
+  const host=document.getElementById("tree");
+  if(!host)return;
+  const rows=[];
+  const walk=(path,depth)=>{
+    for(const n of TREE.nodes[path]||[]){
+      const open=!!TREE.open[n.path];
+      const on=isPicked(n.path);
+      rows.push(`<div class="tnode" style="padding-left:${depth*14}px">
+        <input type="checkbox" ${on?"checked":""}
+          onchange="pickNode('${esc(n.path)}')">
+        ${n.kind==="folder"
+          ?`<span class="tcar${open?" open":""}" onclick="toggleNode('${esc(n.path)}')">▸</span>`
+          :`<span class="tcar"></span>`}
+        <span class="tname" ${n.kind==="folder"
+          ?`onclick="toggleNode('${esc(n.path)}')"`:""}>${esc(n.name)}</span>
+        <span class="tsize">${n.size==null?"":bytes(n.size)}</span>
+      </div>`);
+      if(open)walk(n.path,depth+1);
+    }
+    if(TREE.busy.has(path))rows.push(
+      `<div class="tnode" style="padding-left:${depth*14}px"><span class="tcar"></span>
+        <span class="tname fine">looking…</span></div>`);
+  };
+  walk("",0);
+  host.hidden=false;
+  host.innerHTML=rows.join("")||`<div class="tnode fine">Nothing here.</div>`;
+
+  const {files,bytes:total,unknown}=picked();
+  const go=document.getElementById("urlgo");
+  if(go)go.textContent=files||unknown
+    ?`Download ${unknown&&!files?"selection":num(files)+(unknown?"+":"")}`
+    :"Download";
+  setUrlState(files||unknown
+    ?`${num(files)}${unknown?"+":""} file${files===1&&!unknown?"":"s"} · ${bytes(total)}${
+        unknown?" and more inside folders not yet opened":""}`
+    :"Tick what you want.","");
+}
+
 function openAdd(){
   PLANNED=null;
   const err=document.getElementById("urlerr");
   if(err){err.hidden=true;err.textContent=""}
+  TREE={url:"",open:{},nodes:{},picked:new Set(),busy:new Set()};
+  const tree=document.getElementById("tree");
+  if(tree){tree.hidden=true;tree.innerHTML=""}
   urlmodal.hidden=false;
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
@@ -1345,7 +1483,8 @@ async function planUrl(){
     let result=null;
     setUrlState("Starting…","Working");
     try{
-      await streamJSON("/api/fetch",{url,confirm:true},frame=>{
+      const paths=[...TREE.picked];
+      await streamJSON("/api/fetch",{url,confirm:true,paths},frame=>{
         if(frame.t==="file")showProgress(frame.done,frame.total,frame.name);
         else if(frame.t==="added")result=frame;
       });
@@ -1369,6 +1508,13 @@ async function planUrl(){
   try{
     const p=await postJSON("/api/fetch",{url});
     PLANNED=url;
+    if(p.count>1){
+      // More than one file means a choice, so show what is there rather than
+      // asking someone to agree to a number.
+      TREE={url,open:{},nodes:{},picked:new Set(),busy:new Set()};
+      await openNode("");
+      return;
+    }
     const size=p.bytes?` · ${bytes(p.bytes)}`:"";
     const sample=p.names.length?` — ${p.names.slice(0,3).join(", ")}${
       p.count>3?", …":""}`:"";
@@ -2167,6 +2313,7 @@ def _ai_state() -> dict:
         # Every credential the viewer can hold — names and tails, never values.
         "secrets": config.state(),
         "aws_profile": config.aws_profile(),
+        "aws_profiles": fetch._profiles(),
         "hosts": sorted(set(fetch.HOSTS)),
     }
 
@@ -2367,6 +2514,23 @@ class _Handler(BaseHTTPRequestHandler):
             self._fetch({"url": source, "into": into, "confirm": True})
             return
 
+        if url.path == "/api/browse":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            try:
+                nodes = fetch.browse(
+                    body.get("url") or "", body.get("path") or "", config.tokens()
+                )
+            except fetch.FetchError as exc:
+                self._json({"error": str(exc)}, 400)
+                return
+            self._json({"nodes": [n._asdict() for n in nodes]})
+            return
+
         if url.path == "/api/fetch":
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -2558,7 +2722,12 @@ class _Handler(BaseHTTPRequestHandler):
         nobody should discover that by pressing a button once.
         """
         try:
-            plan = fetch.plan(body.get("url") or "", config.tokens())
+            picked = body.get("paths")
+            plan = (
+                fetch.select(body.get("url") or "", picked, config.tokens())
+                if picked
+                else fetch.plan(body.get("url") or "", config.tokens())
+            )
             service, label, files = plan.service, plan.label, plan.files
             into = fetch.destination(body.get("into"))
         except fetch.FetchError as exc:
@@ -2628,9 +2797,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return
 
             with self.lock:
+                # What is new, not what the destination happens to contain: a
+                # second fetch into the same folder re-scans everything already
+                # there, and reporting that as "added" is a lie.
+                known = {e.key for e in self.entries}
                 merged = corpus.merge(self.entries, found)
                 self.entries = merged
                 _Handler.entries = merged
+            fresh = sum(1 for e in found if e.key not in known)
             corpus.save(merged)
             for entry in found:
                 library.update(
@@ -2638,7 +2812,7 @@ class _Handler(BaseHTTPRequestHandler):
                     source=_source_of(entry, home, plan.web, unpacked_from),
                     into=str(into),
                 )
-            yield {"t": "added", "added": len(found), "into": str(home)}
+            yield {"t": "added", "added": fresh, "into": str(home)}
 
         self._frames(produce)
 

@@ -80,6 +80,9 @@ S3_PREFIX = re.compile(r"^[\w!.*'()/ -]*$")
 AWS_PROFILE = re.compile(r"^[\w.@][\w.@-]{0,63}$")
 AWS_TIMEOUT = 300
 
+# One folder's listing. Generous, but a browser draws it, so not unbounded.
+BROWSE_LIMIT = 3_000
+
 MAX_FILES = 2_000
 MAX_TOTAL_BYTES = 2 * 1024**3
 TIMEOUT = 60
@@ -87,6 +90,15 @@ TIMEOUT = 60
 
 class FetchError(RuntimeError):
     """Anything the person who pasted the URL needs to know about."""
+
+
+class Node(NamedTuple):
+    """One entry in a remote folder listing."""
+
+    name: str
+    path: str  # full path within the location, as the remote spells it
+    kind: str  # "folder" | "file"
+    size: int | None
 
 
 class Plan(NamedTuple):
@@ -395,6 +407,129 @@ def _github_plan(url: str, token: str | None) -> tuple[str, list[Remote], str]:
     return f"{owner}--{repo}", files, web
 
 
+# ---------------------------------------------------------------- browsing ---
+
+
+def browse(url: str, inside: str, tokens: dict[str, str | None]) -> list[Node]:
+    """One level of a remote location.
+
+    A level at a time rather than the whole thing: the bucket this was built for
+    holds 118,801 objects, and listing all of them to draw a picker would be
+    slower and larger than most of the downloads it is meant to avoid.
+    """
+    url = (url or "").strip()
+    inside = (inside or "").strip("/")
+
+    if url.startswith("s3://"):
+        return _s3_browse(url, inside, resolve_profile(tokens.get("aws") or ""))
+
+    service = _check_host(url)
+    if service == "hf":
+        return _hf_browse(url, inside, tokens.get("hf"))
+    if service == "github":
+        return _github_browse(url, inside, tokens.get("github"))
+    raise FetchError("That is a single file, so there is nothing to look inside.")
+
+
+def _s3_browse(url: str, inside: str, profile: str) -> list[Node]:
+    bucket, _, base = url[len("s3://") :].strip("/").partition("/")
+    if not S3_BUCKET.match(bucket):
+        raise FetchError(f"{bucket!r} is not a valid S3 bucket name.")
+    prefix = "/".join(p for p in (base, inside) if p)
+    if prefix:
+        prefix += "/"
+    if not S3_PREFIX.match(prefix):
+        raise FetchError("That key prefix has characters this will not pass to the CLI.")
+
+    args = ["s3api", "list-objects-v2", "--bucket", bucket, "--delimiter", "/",
+            "--max-items", str(BROWSE_LIMIT)]
+    if prefix:
+        args += ["--prefix", prefix]
+    listing = json.loads(_aws(args, profile) or "{}")
+
+    nodes = [
+        Node(
+            name=row["Prefix"][len(prefix):].strip("/"),
+            path=f"{inside}/{row['Prefix'][len(prefix):]}".strip("/"),
+            kind="folder",
+            size=None,
+        )
+        for row in listing.get("CommonPrefixes", [])
+    ]
+    nodes += [
+        Node(
+            name=row["Key"][len(prefix):],
+            path=f"{inside}/{row['Key'][len(prefix):]}".strip("/"),
+            kind="file",
+            size=row.get("Size"),
+        )
+        for row in listing.get("Contents", [])
+        if row["Key"] != prefix and str(row.get("Key", "")).endswith(SUFFIXES)
+    ]
+    return nodes
+
+
+def _hf_browse(url: str, inside: str, token: str | None) -> list[Node]:
+    parsed = urlparse(url)
+    match = _HF.match(parsed.path)
+    if not match:
+        raise FetchError("That does not look like a Hugging Face repo URL.")
+    repo = match.group("repo")
+    kind = match.group("kind") or "models"
+    rev = match.group("rev") or "main"
+    base = (match.group("path") or "").strip("/")
+    where = "/".join(p for p in (base, inside) if p)
+
+    rows = _json(
+        f"https://huggingface.co/api/{kind if match.group('kind') else 'models'}"
+        f"/{repo}/tree/{rev}/{quote(where)}",
+        token,
+        "hf",
+    )
+    return _level(rows, "type", "directory", "path", where, inside, "size")
+
+
+def _github_browse(url: str, inside: str, token: str | None) -> list[Node]:
+    parsed = urlparse(url)
+    match = _GH.match(parsed.path)
+    if not match:
+        raise FetchError("That does not look like a GitHub repo URL.")
+    owner, repo = match.group("owner"), match.group("repo").removesuffix(".git")
+    rev = match.group("rev")
+    base = (match.group("path") or "").strip("/")
+    if rev is None:
+        info = _json(f"https://api.github.com/repos/{owner}/{repo}", token, "github")
+        rev = info.get("default_branch") or "main"
+    where = "/".join(p for p in (base, inside) if p)
+
+    rows = _json(
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{quote(where)}?ref={rev}",
+        token,
+        "github",
+    )
+    if not isinstance(rows, list):
+        raise FetchError("That path is a file, not a folder.")
+    return _level(rows, "type", "dir", "path", where, inside, "size")
+
+
+def _level(rows, type_key, folder_word, path_key, where, inside, size_key) -> list[Node]:
+    """Turn one API listing into nodes, keeping only what is worth fetching."""
+    nodes: list[Node] = []
+    for row in rows:
+        full = str(row.get(path_key, ""))
+        name = full[len(where):].strip("/") if where else full
+        if not name:
+            continue
+        here = f"{inside}/{name}".strip("/")
+        if row.get(type_key) == folder_word:
+            nodes.append(Node(name=name, path=here, kind="folder", size=None))
+        elif full.endswith(SUFFIXES):
+            nodes.append(
+                Node(name=name, path=here, kind="file", size=row.get(size_key))
+            )
+    return nodes
+
+
 # -------------------------------------------------------------------- api ----
 
 
@@ -445,7 +580,28 @@ def _sized(plan: "Plan") -> "Plan":
     return plan
 
 
-def plan(url: str, tokens: dict[str, str | None]) -> Plan:
+def select(url: str, paths: list[str], tokens: dict[str, str | None]) -> Plan:
+    """A plan covering only what was ticked.
+
+    A ticked folder means everything under it, so folders are expanded here
+    rather than in the page: the page would have to walk the remote to find out
+    what it had just agreed to, which is the work this avoids.
+    """
+    whole = plan(url, tokens, sized=False)
+    wanted = {p.strip("/") for p in paths if p and p.strip("/")}
+    if not wanted:
+        raise FetchError("Nothing was ticked.")
+
+    chosen = [
+        f
+        for f in whole.files
+        if f.name.strip("/") in wanted
+        or any(f.name.strip("/").startswith(w + "/") for w in wanted)
+    ]
+    return _sized(Plan(whole.service, whole.label, chosen, whole.web))
+
+
+def plan(url: str, tokens: dict[str, str | None], sized: bool = True) -> Plan:
     """What fetching this URL would pull: the service, a label, and the files."""
     url = (url or "").strip()
     if not url:
@@ -453,7 +609,8 @@ def plan(url: str, tokens: dict[str, str | None]) -> Plan:
 
     if url.startswith("s3://"):
         bucket, files, where = _s3_plan(url, resolve_profile(tokens.get("aws") or ""))
-        return _sized(Plan("s3", bucket, files, where))
+        made = Plan("s3", bucket, files, where)
+        return _sized(made) if sized else made
 
     service = _check_host(url)
     token = tokens.get(service)
@@ -470,7 +627,8 @@ def plan(url: str, tokens: dict[str, str | None]) -> Plan:
         ], ""
     else:
         label, files, web = (_hf_plan if service == "hf" else _github_plan)(url, token)
-    return _sized(Plan(service, label, files, web))
+    made = Plan(service, label, files, web)
+    return _sized(made) if sized else made
 
 
 def download(

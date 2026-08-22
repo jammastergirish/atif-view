@@ -28,9 +28,14 @@ Nothing appears on a first run. Sessions arrive two ways:
 - **Add…** in the top bar brings things in from elsewhere — a file, a folder or
   an archive from this machine, or a URL.
 
-Nothing downloads on the first press. It lists what is there — how many files,
-how large, and where they will land — and downloads only when pressed again,
-with a progress bar as each file arrives. The index is refreshed before anything
+Nothing downloads on the first press. A link to a single file is confirmed and
+fetched; anything larger opens a **picker** — the folder tree, one level at a
+time, with sizes and checkboxes — so what gets downloaded is chosen rather than
+accepted. Folders open as they are clicked rather than up front: the bucket this
+was built against holds 118,801 objects, and listing all of them to draw a tree
+would cost more than most of the downloads it exists to avoid. Ticking a folder
+takes everything under it, and the running total says how much that is, marking
+itself as a floor while a ticked folder is still unopened. The index is refreshed before anything
 cosmetic happens, so a failure after the download cannot cost you the rows you
 just paid for.
 
@@ -66,9 +71,10 @@ holds an AWS credential and never has to renew one. Sign in yourself —
 aws sso login --profile rw-eng
 ```
 
-— and the viewer reuses the session. Naming the profile in Settings is only
-needed when a machine has several: with one configured, or `AWS_PROFILE` set,
-there is nothing to disambiguate and nothing to type. It never
+— and the viewer reuses the session. Naming a profile is only needed when a
+machine has several: with one configured, or `AWS_PROFILE` set, there is nothing
+to disambiguate and nothing to type. Where there are several, Settings offers
+them as a list read from the CLI rather than asking anyone to remember one. It never
 runs the login: that is an interactive, browser-based act belonging to the person
 at the keyboard. When there is no usable session it says so and gives the exact
 command, because the CLI's own advice (`aws login`) is not the SSO one.
