@@ -877,6 +877,51 @@ test("a watching scan that finds something says so", async () => {
   assert.match(notes[0], /2 new sessions/);
 });
 
+test("collapsing a node hides everything beneath it, not just its children", () => {
+  const rows = run(`
+    GROUPS=["Remote","Remote/Hugging Face","Remote/Hugging Face/owner",
+            "Remote/Hugging Face/owner/repo","Remote/Hugging Face/owner/repo/attacks",
+            "Remote/Hugging Face/owner/repo/attacks/one"];
+    INDEX=[{key:"a",group:"Remote/Hugging Face/owner/repo/attacks/one"}];
+    // Everything open, then one node in the middle closed.
+    EXPANDED={};
+    for(const g of GROUPS)EXPANDED[g]=true;
+    EXPANDED["Remote/Hugging Face/owner/repo"]=false;
+    return visibleRails().map(r=>r.path);`);
+  assert.ok(rows.includes("Remote/Hugging Face/owner/repo"), "the closed node itself vanished");
+  const beneath = rows.filter((p) => p.startsWith("Remote/Hugging Face/owner/repo/"));
+  assert.deepStrictEqual(beneath, [], `still showing: ${beneath.join(", ")}`);
+});
+
+test("a node stays visible while every ancestor is open", () => {
+  const rows = run(`
+    GROUPS=["Local","Local/Claude Code","Local/Claude Code/atif-view"];
+    INDEX=[{key:"a",group:"Local/Claude Code/atif-view"}];
+    EXPANDED={"Local":true,"Local/Claude Code":true};
+    return visibleRails().map(r=>r.path);`);
+  assert.ok(rows.includes("Local/Claude Code/atif-view"));
+});
+
+test("closing the top node leaves only the top nodes", () => {
+  const rows = run(`
+    GROUPS=["Local","Local/Claude Code","Local/Claude Code/atif-view","Remote"];
+    INDEX=[{key:"a",group:"Local/Claude Code/atif-view"}];
+    EXPANDED={"Local":false,"Local/Claude Code":true};
+    return visibleRails().map(r=>r.path);`);
+  assert.deepStrictEqual(rows, ["__all", "Local", "Remote"]);
+});
+
+test("counts still roll up through a closed node", () => {
+  const rows = run(`
+    GROUPS=["Local","Local/Claude Code","Local/Claude Code/atif-view"];
+    INDEX=[{key:"a",group:"Local/Claude Code/atif-view"},
+           {key:"b",group:"Local/Claude Code/atif-view"}];
+    EXPANDED={};
+    return visibleRails();`);
+  const local = rows.find((r) => r.path === "Local");
+  assert.strictEqual(local.count, 2, "a closed node should still count what is inside");
+});
+
 // ---- runner --------------------------------------------------------------------
 (async () => {
   let failed = 0;

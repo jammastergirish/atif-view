@@ -967,10 +967,20 @@ function visibleRails(){
       counts[p]=(counts[p]||0)+1;
     }
   }
+  // Every ancestor must be open, not just the one directly above: checking a
+  // single parent left a collapsed node's grandchildren on screen, because
+  // their own parent was still marked expanded from an earlier click.
+  const shown=path=>{
+    const parts=path.split("/");
+    for(let i=1;i<parts.length;i++){
+      if(!EXPANDED[parts.slice(0,i).join("/")])return false;
+    }
+    return true;
+  };
+
   const rows=[{path:"__all",name:"All",depth:0,count:INDEX.length}];
   for(const n of buildForest(GROUPS)){
-    const parent=n.path.split("/").slice(0,-1).join("/");
-    if(parent&&!EXPANDED[parent])continue;   // hidden under a collapsed parent
+    if(!shown(n.path))continue;
     rows.push({...n,count:counts[n.path]||0,
       children:GROUPS.some(f=>f.startsWith(n.path+"/")),
       source:sourceOf(n.path)});
