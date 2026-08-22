@@ -358,7 +358,7 @@ def test_opened_files_are_marked_and_stored_outside_temp(server):
 def test_annotating_a_session_persists_and_comes_back_in_the_index(server):
     key = _first_key(server)
     status, record = _post_json(server + "/api/library", {
-        "key": key, "title": "SOC2 web app", "folder": "Redwood/SOC2",
+        "key": key, "title": "SOC2 web app", "collection": "Redwood/SOC2",
         "tags": ["security", "needs-review"], "starred": True,
     })
     assert status == 200
@@ -369,7 +369,7 @@ def test_annotating_a_session_persists_and_comes_back_in_the_index(server):
     assert row["title"] == "SOC2 web app"
     assert row["tags"] == ["security", "needs-review"]
     # The rail and filter bar are served alongside, already aggregated.
-    assert index["folders"] == ["Redwood", "Redwood/SOC2"]
+    assert index["collections"] == ["Redwood", "Redwood/SOC2"]
     assert {t["name"]: t["count"] for t in index["tags"]} == {
         "security": 1, "needs-review": 1,
     }
@@ -379,19 +379,6 @@ def test_annotating_without_a_key_is_rejected(server):
     with pytest.raises(urllib.error.HTTPError) as caught:
         _post_json(server + "/api/library", {"title": "orphan"})
     assert caught.value.code == 400
-
-
-def test_deleting_annotations_keeps_a_scanned_session(server):
-    key = _first_key(server)
-    _post_json(server + "/api/library", {"key": key, "title": "Named"})
-    request = urllib.request.Request(
-        server + f"/api/library?id={key}", method="DELETE"
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        assert response.status == 200
-    rows = {r["key"]: r for r in _sessions(server)}
-    # The transcript is still there — only what we said about it is gone.
-    assert key in rows and rows[key]["title"] == ""
 
 
 def test_deleting_an_opened_session_removes_its_copy(server):
@@ -793,3 +780,94 @@ def test_a_missing_file_is_hidden_rather_than_forgotten(server, tmp_path, monkey
     Path(stored[0].path).unlink()
     assert not [s for s in _sessions(server) if "temporary" in s["path"]]
     assert [e for e in corpus.load() if "temporary" in e.path], "the entry was purged"
+
+
+# ---- deleting ----------------------------------------------------------------------
+
+
+def _delete(url: str) -> tuple[int, dict]:
+    request = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_deleting_a_session_takes_its_stars_and_summaries_with_it(server):
+    """Everything kept about a transcript lives in one record, and goes at once."""
+    from atif_view import library
+
+    key = _first_key(server)
+    _try_post(server + "/api/library", {
+        "key": key, "title": "kept things", "tags": ["one"],
+        "starred": True, "starred_steps": ["1", "2"],
+        "summaries": {"call_a": "it listed files"},
+    })
+    stored = library.get(key)
+    assert stored["starred_steps"] == ["1", "2"]
+    assert stored["summaries"] == {"call_a": "it listed files"}
+
+    status, payload = _delete(server + f"/api/library?id={key}")
+    assert status == 200 and payload["removed"]
+
+    assert key not in library.load(), "the record survived the session"
+    fresh = library.get(key)
+    assert fresh["starred_steps"] == [] and fresh["summaries"] == {}
+    assert fresh["title"] == "" and fresh["tags"] == []
+
+
+def test_a_scanned_session_is_forgotten_but_its_file_is_left_alone(server):
+    """Found on the machine means it is not ours to delete."""
+    key = _first_key(server)
+    path = Path(_sessions(server)[0]["path"])
+    status, payload = _delete(server + f"/api/library?id={key}")
+    assert status == 200
+    assert payload["removed_copy"] is False
+    assert path.exists(), "a file we merely found was deleted"
+    assert not _sessions(server)
+
+
+def test_an_opened_copy_is_deleted_because_the_viewer_made_it(server):
+    status, _ = _post(server + "/api/open", LOG.encode(), "brought-in.jsonl")
+    assert status == 200
+    row = next(s for s in _sessions(server) if "brought-in" in s["path"])
+    assert row["origin"] == "opened"
+
+    path = Path(row["path"])
+    status, payload = _delete(server + f"/api/library?id={row['key']}")
+    assert status == 200 and payload["removed_copy"] is True
+    assert not path.exists(), "the viewer's own copy was left behind"
+
+
+def test_deleting_a_collection_keeps_what_was_in_it(server):
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "collection": "Work/Reviews"})
+    assert "Work/Reviews" in _index(server)["collections"]
+
+    status, payload = _delete(server + "/api/collection?name=Work")
+    assert status == 200 and payload["unfiled"] == 1
+    rows = _sessions(server)
+    assert len(rows) == 1, "the session went with its collection"
+    assert rows[0]["collection"] == ""
+    assert "Work" not in _index(server)["collections"]
+
+
+def test_deleting_a_collection_with_its_contents_removes_the_sessions(server):
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "collection": "Work/Reviews"})
+    status, payload = _delete(server + "/api/collection?name=Work&contents=1")
+    assert status == 200 and payload["removed"] == 1
+    assert not _sessions(server)
+
+
+def test_a_collection_takes_its_nested_ones_with_it(server):
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "collection": "A/B/C"})
+    status, payload = _delete(server + "/api/collection?name=A")
+    assert status == 200 and payload["unfiled"] == 1
+
+
+def test_a_collection_name_is_required(server):
+    status, payload = _delete(server + "/api/collection?name=")
+    assert status == 400 and "collection is required" in payload["error"]

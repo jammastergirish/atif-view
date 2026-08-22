@@ -31,20 +31,20 @@ def test_library_of_the_wrong_shape_reads_as_empty(store):
 
 
 def test_update_then_load_round_trips(store):
-    library.update("k1", store, title="SOC2 web app", folder="Redwood/SOC2")
+    library.update("k1", store, title="SOC2 web app", collection="Redwood/SOC2")
     record = library.get("k1", store)
     assert record["title"] == "SOC2 web app"
-    assert record["folder"] == "Redwood/SOC2"
+    assert record["collection"] == "Redwood/SOC2"
     assert record["tags"] == []
 
 
 def test_update_merges_rather_than_replaces(store):
     library.update("k1", store, title="First", tags=["security"])
-    library.update("k1", store, folder="Redwood")
+    library.update("k1", store, collection="Redwood")
     record = library.get("k1", store)
     assert record["title"] == "First"  # untouched by the second write
     assert record["tags"] == ["security"]
-    assert record["folder"] == "Redwood"
+    assert record["collection"] == "Redwood"
 
 
 def test_unknown_fields_are_ignored(store):
@@ -57,9 +57,9 @@ def test_tags_are_normalised_and_deduped(store):
     assert library.get("k1", store)["tags"] == ["security", "needs-review"]
 
 
-def test_folder_segments_are_cleaned(store):
-    library.update("k1", store, folder=" /Redwood//  SOC2 / ")
-    assert library.get("k1", store)["folder"] == "Redwood/SOC2"
+def test_collection_segments_are_cleaned(store):
+    library.update("k1", store, collection=" /Redwood//  SOC2 / ")
+    assert library.get("k1", store)["collection"] == "Redwood/SOC2"
 
 
 def test_clearing_every_field_forgets_the_entry(store):
@@ -79,10 +79,10 @@ def test_update_requires_a_key(store):
         library.update("", store, title="orphan")
 
 
-def test_folders_include_implied_parents(store):
+def test_collections_include_implied_parents(store):
     """A tree with a hole in it is worse than no tree."""
-    library.update("k1", store, folder="Redwood/SOC2/Evidence")
-    assert library.folders(store) == [
+    library.update("k1", store, collection="Redwood/SOC2/Evidence")
+    assert library.collections(store) == [
         "Redwood",
         "Redwood/SOC2",
         "Redwood/SOC2/Evidence",

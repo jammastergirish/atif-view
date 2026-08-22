@@ -64,7 +64,23 @@ directory or archive and it will scan that instead.
 ## The library
 
 Sessions are organised, not just listed. Rename one, file it into a collection
-(nested with `/`), tag it across collections, star it. The collection rail on
+(nested with `/`), tag it across collections, star it. A **collection** groups
+sessions in the library; a **folder** is a directory on disk. They are kept
+distinct because conflating them made "which folder?" an ambiguous question.
+
+Every session says where it came from — **indexed** from this machine, opened
+from a **local** file, or fetched from a **url** — and the filter bar narrows to
+any of the three.
+
+Removing a session takes everything kept about it: its title, collection, tags,
+stars, starred steps and any cached AI summaries, all of which live in one
+record. Files are deleted only where they are the viewer's own copy under
+`~/.atif/opened/`; a session found on this machine, or downloaded into a folder
+of yours, keeps its file. Removing a collection leaves its sessions unfiled, or
+takes them with it — the two are separate actions.
+
+A collection built by fetching a repository links back to the folder it
+mirrors. The collection rail on
 the left rolls counts up the tree; the filter bar narrows by tag, or to files
 you opened yourself.
 

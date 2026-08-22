@@ -30,7 +30,7 @@ import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote, urlparse
 
 # Hosts whose layout is understood well enough to list a repository. Anything
@@ -65,6 +65,15 @@ TIMEOUT = 60
 
 class FetchError(RuntimeError):
     """Anything the person who pasted the URL needs to know about."""
+
+
+class Plan(NamedTuple):
+    """What a URL would bring in."""
+
+    service: str
+    label: str
+    files: list["Remote"]
+    web: str  # where to browse this on the site, "" if there is nowhere
 
 
 @dataclass(frozen=True)
@@ -156,7 +165,7 @@ _HF = re.compile(
 )
 
 
-def _hf_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
+def _hf_plan(url: str, token: str | None) -> tuple[str, list[Remote], str]:
     parsed = urlparse(url)
     match = _HF.match(parsed.path)
     if not match:
@@ -172,10 +181,11 @@ def _hf_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
     def raw(path: str) -> str:
         return f"https://huggingface.co/{prefix}{repo}/resolve/{rev}/{quote(path)}"
 
+    web = f"https://huggingface.co/{prefix}{repo}/tree/{rev}"
     if match.group("action") == "blob" or (inner and inner.endswith(SUFFIXES)):
         return repo.replace("/", "--"), [
             Remote(name=inner.split("/")[-1], url=raw(inner))
-        ]
+        ], web
 
     listing = _json(
         f"https://huggingface.co/api/{api_kind}/{repo}/tree/{rev}/{quote(inner)}"
@@ -188,7 +198,7 @@ def _hf_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
         for row in listing
         if row.get("type") == "file" and str(row.get("path", "")).endswith(SUFFIXES)
     ]
-    return repo.replace("/", "--"), files
+    return repo.replace("/", "--"), files, web
 
 
 # ------------------------------------------------------------------ github ---
@@ -199,12 +209,12 @@ _GH = re.compile(
 )
 
 
-def _github_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
+def _github_plan(url: str, token: str | None) -> tuple[str, list[Remote], str]:
     parsed = urlparse(url)
 
     if parsed.netloc == "raw.githubusercontent.com":
         name = parsed.path.strip("/").split("/")[-1]
-        return "github", [Remote(name=name, url=url)]
+        return "github", [Remote(name=name, url=url)], ""
 
     match = _GH.match(parsed.path)
     if not match:
@@ -221,8 +231,11 @@ def _github_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
     def raw(path: str) -> str:
         return f"https://raw.githubusercontent.com/{owner}/{repo}/{rev}/{quote(path)}"
 
+    web = f"https://github.com/{owner}/{repo}/tree/{rev}"
     if match.group("action") in ("blob", "raw"):
-        return f"{owner}--{repo}", [Remote(name=inner.split("/")[-1], url=raw(inner))]
+        return f"{owner}--{repo}", [
+            Remote(name=inner.split("/")[-1], url=raw(inner))
+        ], web
 
     tree = _json(
         f"https://api.github.com/repos/{owner}/{repo}/git/trees/{rev}?recursive=1",
@@ -241,7 +254,7 @@ def _github_plan(url: str, token: str | None) -> tuple[str, list[Remote]]:
         and str(row.get("path", "")).endswith(SUFFIXES)
         and (not inner or str(row.get("path", "")).startswith(f"{inner}/"))
     ]
-    return f"{owner}--{repo}", files
+    return f"{owner}--{repo}", files, web
 
 
 # -------------------------------------------------------------------- api ----
@@ -271,7 +284,7 @@ def destination(raw: str | None) -> Path:
     return path
 
 
-def plan(url: str, tokens: dict[str, str | None]) -> tuple[str, str, list[Remote]]:
+def plan(url: str, tokens: dict[str, str | None]) -> Plan:
     """What fetching this URL would pull: the service, a label, and the files."""
     url = (url or "").strip()
     if not url:
@@ -286,9 +299,11 @@ def plan(url: str, tokens: dict[str, str | None]) -> tuple[str, str, list[Remote
                 f"{name} is not a kind this reads — looking for "
                 f"{', '.join(SUFFIXES)}."
             )
-        label, files = urlparse(url).hostname or "download", [Remote(name=name, url=url)]
+        label, files, web = urlparse(url).hostname or "download", [
+            Remote(name=name, url=url)
+        ], ""
     else:
-        label, files = (_hf_plan if service == "hf" else _github_plan)(url, token)
+        label, files, web = (_hf_plan if service == "hf" else _github_plan)(url, token)
     if not files:
         raise FetchError(
             "Nothing convertible there — looking for .jsonl, .json or .har files."
@@ -303,7 +318,7 @@ def plan(url: str, tokens: dict[str, str | None]) -> tuple[str, str, list[Remote
         raise FetchError(
             f"That is {known / 1024**3:.1f} GB, over the {MAX_TOTAL_BYTES // 1024**3} GB limit."
         )
-    return service, label, files
+    return Plan(service, label, files, web)
 
 
 def download(

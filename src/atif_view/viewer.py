@@ -147,6 +147,15 @@ body.hide-side #main{padding-left:52px}
 .rail:hover{background:var(--bg)}
 .rail.on{background:var(--soft);border-left-color:var(--accent);color:var(--accent)}
 .rail .rl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.racts{display:none;gap:1px;margin-left:auto}
+.rail:hover .racts{display:inline-flex}
+.racts button{border:none;background:none;color:var(--muted);cursor:pointer;
+  font-size:11px;padding:0 3px;line-height:1}
+.racts button:hover{color:var(--ink)}
+.rsrc{color:var(--muted);text-decoration:none;font-size:11px;padding:0 3px;line-height:1}
+.rsrc:hover{color:var(--accent)}
+.racts button.dang:hover{color:var(--danger)}
+.acts button.dang:hover{color:var(--danger)}
 .rail .rc{font:500 10px var(--font-mono);color:var(--muted)}
 .caret{width:10px;display:inline-flex;color:var(--muted);opacity:.75;
   transition:transform .12s ease}
@@ -821,8 +830,8 @@ const bytes=n=>n>=1024**3?`${(n/1024**3).toFixed(1)} GB`
   :`${Math.max(1,Math.round(n/1024))} KB`;
 const short=s=>{const p=String(s||"").split("/").filter(Boolean);return p.slice(-2).join("/")||s};
 const PAGE_SIZE=250;
-let INDEX=[],FOLDERS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
-    collection="__all",ACTIVE_TAGS={},ONLY_OPENED=false,EDITING=null,
+let INDEX=[],COLLECTIONS=[],TAGS=[],AI={},DOWNLOADS="",CHAT=[],ASK_OPEN=false,cur=null,traj=null,
+    collection="__all",ACTIVE_TAGS={},ACTIVE_ORIGINS={},EDITING=null,
     EXPANDED=(()=>{try{return JSON.parse(localStorage.getItem("atif-view.folders"))||{}}catch(e){return {}}})(),show={user:1,agent:1,system:1},onlyBranches=false,limit=PAGE_SIZE,raw=false;
 let tab="trajectory",query="",lens="all",extra=null,RENAMING=false,OPEN_ALL=false;
 
@@ -853,7 +862,7 @@ async function openFiles(files){
     }catch(err){problems.push(`${file.name}: ${err.message}`)}
   }
   const fresh=await fetch("/api/index").then(r=>r.json());
-  INDEX=fresh.sessions||[];FOLDERS=fresh.folders||[];TAGS=fresh.tags||[];AI=fresh.ai||{};DOWNLOADS=fresh.downloads||DOWNLOADS;
+  INDEX=fresh.sessions||[];COLLECTIONS=fresh.collections||[];TAGS=fresh.tags||[];AI=fresh.ai||{};DOWNLOADS=fresh.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();
   if(first!==null)pick(first);
   if(problems.length)note(problems.join("\n"));
@@ -928,7 +937,7 @@ addEventListener("keydown",e=>{
 });
 
 fetch("/api/index").then(r=>r.json()).then(d=>{
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
+  INDEX=d.sessions||[];COLLECTIONS=d.collections||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
 });
 q.oninput=drawList;
@@ -945,23 +954,37 @@ function visibleRails(){
   const counts={};
   let unfiled=0;
   for(const e of INDEX){
-    if(!e.folder){unfiled++;continue}
+    if(!e.collection){unfiled++;continue}
     // A session in Redwood/SOC2 counts toward Redwood too, as Diwan rolls up.
-    const parts=e.folder.split("/");
+    const parts=e.collection.split("/");
     for(let i=1;i<=parts.length;i++){
       const p=parts.slice(0,i).join("/");
       counts[p]=(counts[p]||0)+1;
     }
   }
   const rows=[{path:"__all",name:"All",depth:0,count:INDEX.length}];
-  for(const n of buildForest(FOLDERS)){
+  for(const n of buildForest(COLLECTIONS)){
     const parent=n.path.split("/").slice(0,-1).join("/");
     if(parent&&!EXPANDED[parent])continue;   // hidden under a collapsed parent
     rows.push({...n,count:counts[n.path]||0,
-      children:FOLDERS.some(f=>f.startsWith(n.path+"/"))});
+      children:COLLECTIONS.some(f=>f.startsWith(n.path+"/")),
+      source:sourceOf(n.path)});
   }
   rows.push({path:"__unfiled",name:"Unfiled",depth:0,count:unfiled});
   return rows;
+}
+
+/* Where a collection came from, if it was built by fetching a repository.
+   Any session in it knows; they all point at the same place. */
+function sourceOf(path){
+  const member=INDEX.find(e=>e.source&&(e.collection===path
+    ||(e.collection||"").startsWith(path+"/")));
+  if(!member)return "";
+  // A nested collection mirrors a nested folder, so trim back to this level.
+  const depth=(member.collection||"").split("/").length-path.split("/").length;
+  return depth>0
+    ? member.source.split("/").slice(0,-depth).join("/")
+    : member.source;
 }
 
 function drawList(){
@@ -977,6 +1000,15 @@ function drawList(){
     return `<div class="rail${on?" on":""}" onclick="setCollection('${esc(r.path)}')"
         style="padding-left:${10+r.depth*13}px">
         ${caret}<span class="rl">${esc(r.name)}</span>
+        ${r.path.startsWith("__")?"":`<span class="racts">
+          ${r.source?`<a class="rsrc" href="${esc(r.source)}" target="_blank"
+            rel="noreferrer noopener" title="Open ${esc(r.source)}"
+            onclick="event.stopPropagation()">↗</a>`:""}
+          <button title="Remove the collection, keep its sessions"
+            onclick="event.stopPropagation();dropCollection('${esc(r.path)}',false)">⌫</button>
+          <button title="Remove the sessions in it too" class="dang"
+            onclick="event.stopPropagation();dropCollection('${esc(r.path)}',true)">✕</button>
+        </span>`}
         <span class="rc">${r.count}</span></div>`;
   }).join("");
 
@@ -984,12 +1016,47 @@ function drawList(){
     const on=!!ACTIVE_TAGS[t.name];
     return `<span class="pill tag${on?" on":""}" onclick="toggleTag('${esc(t.name)}')">
       ${esc(t.name)}<b>${t.count}</b></span>`;
-  }).join("")+(INDEX.some(e=>e.origin==="opened")
-    ? `<span class="pill origin${ONLY_OPENED?" on":""}" onclick="toggleOpened()"
-         title="Opened by you, rather than found on this machine">opened</span>` : "");
+  }).join("")+ORIGINS.filter(o=>INDEX.some(e=>e.origin===o.key)).map(o=>
+    `<span class="pill origin${ACTIVE_ORIGINS[o.key]?" on":""}"
+       onclick="toggleOrigin('${o.key}')" title="${o.hint}">${o.label}</span>`).join("");
 }
 
 const setCollection=p=>{collection=p;cur=null;drawList();showLibrary()};
+
+/* Removing says what it will and will not touch. Only a copy the viewer made
+   itself is deleted; a session found on this machine, or downloaded to a folder
+   of yours, keeps its file. */
+async function forget(key){
+  const row=INDEX.find(e=>e.key===key)||{};
+  const ours=row.origin==="opened";
+  const what=titleOf(row);
+  if(!confirm(ours
+      ? `Remove "${what}" and delete the copy the viewer made?`
+      : `Remove "${what}" from the library? The file stays where it is.`))return;
+  try{
+    const res=await fetch(`/api/library?id=${encodeURIComponent(key)}`,{method:"DELETE"});
+    if(!res.ok)throw new Error("could not remove that");
+    if(cur===key)cur=null;
+    await refreshIndex();
+    showLibrary();
+  }catch(e){note(e.message)}
+}
+
+async function dropCollection(name,withContents){
+  const inside=INDEX.filter(e=>e.collection===name||(e.collection||"").startsWith(name+"/")).length;
+  if(!confirm(withContents
+      ? `Remove ${inside} session${inside===1?"":"s"} in "${name}" from the library?`
+      : `Remove the collection "${name}"? Its ${inside} session${
+          inside===1?"":"s"} stay, unfiled.`))return;
+  try{
+    const res=await fetch(`/api/collection?name=${encodeURIComponent(name)}`
+      +(withContents?"&contents=1":""),{method:"DELETE"});
+    if(!res.ok)throw new Error("could not remove that collection");
+    if(collection===name||collection.startsWith(name+"/"))collection="__all";
+    await refreshIndex();
+    cur=null;showLibrary();
+  }catch(e){note(e.message)}
+}
 
 function drawCrumb(){
   if(!crumb)return;
@@ -1004,16 +1071,25 @@ const toggleFolder=p=>{EXPANDED[p]=!EXPANDED[p];
   try{localStorage.setItem("atif-view.folders",JSON.stringify(EXPANDED))}catch(e){}
   drawList()};
 const toggleTag=t=>{ACTIVE_TAGS[t]=!ACTIVE_TAGS[t];drawList();if(!cur)showLibrary()};
-const toggleOpened=()=>{ONLY_OPENED=!ONLY_OPENED;drawList();if(!cur)showLibrary()};
+/* Where a session came from. Three answers now that a URL download is not the
+   same act as opening a file off this machine. */
+const ORIGINS=[
+  {key:"scanned",label:"indexed",mark:"◆",hint:"Found on this machine"},
+  {key:"opened", label:"local",  mark:"↥",hint:"Opened from a file on this machine"},
+  {key:"fetched",label:"url",    mark:"↧",hint:"Fetched from a URL"},
+];
+const originOf=key=>ORIGINS.find(o=>o.key===key)||ORIGINS[0];
+const toggleOrigin=k=>{ACTIVE_ORIGINS[k]=!ACTIVE_ORIGINS[k];drawList();if(!cur)showLibrary()};
 
 function libraryRows(){
   const f=q.value.toLowerCase();
   const active=Object.keys(ACTIVE_TAGS).filter(t=>ACTIVE_TAGS[t]);
   return INDEX.filter(e=>{
-    if(collection==="__unfiled"&&e.folder)return false;
+    if(collection==="__unfiled"&&e.collection)return false;
     if(collection!=="__all"&&collection!=="__unfiled"
-       &&!(e.folder===collection||e.folder.startsWith(collection+"/")))return false;
-    if(ONLY_OPENED&&e.origin!=="opened")return false;
+       &&!(e.collection===collection||e.collection.startsWith(collection+"/")))return false;
+    const wanted=ORIGINS.filter(o=>ACTIVE_ORIGINS[o.key]).map(o=>o.key);
+    if(wanted.length&&!wanted.includes(e.origin))return false;
     if(active.length&&!active.every(t=>(e.tags||[]).includes(t)))return false;
     if(f){
       const hay=(e.title||"")+" "+(e.project||"")+" "+(e.session_id||"")+" "
@@ -1063,11 +1139,7 @@ function libraryRow(e){
   return `<div class="tgrid trow" onclick="openRow(event,'${e.key}')">
     <span class="marks">
       ${e.starred?`<svg class="star" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`:""}
-      ${e.origin==="opened"?`<span class="opened" title="Opened by you, not found on this machine">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/>
-          <path d="M4 18v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1"/></svg></span>`:""}
+      <span class="opened" title="${originOf(e.origin).hint}">${originOf(e.origin).mark}</span>
     </span>
     <span class="tcell">${title}</span>
     <span class="mono">${esc(e.agent)}</span>
@@ -1081,6 +1153,8 @@ function libraryRow(e){
       <button title="File into…" onclick="event.stopPropagation();fileInto('${e.key}')">⊞</button>
       <button title="Tags" onclick="event.stopPropagation();startEdit('${e.key}','tags')">◌</button>
       <button title="Star" onclick="event.stopPropagation();star('${e.key}')">★</button>
+      <button title="Remove from the library" class="dang"
+        onclick="event.stopPropagation();forget('${e.key}')">✕</button>
     </span></div>`;
 }
 
@@ -1416,7 +1490,7 @@ async function annotate(key,fields){
 
 async function refreshIndex(){
   const d=await fetch("/api/index").then(r=>r.json());
-  INDEX=d.sessions||[];FOLDERS=d.folders||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
+  INDEX=d.sessions||[];COLLECTIONS=d.collections||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";
   drawList();
   if(!cur)showLibrary();
@@ -1453,7 +1527,7 @@ function star(key){
 
 function fileInto(key){
   const entry=INDEX.find(e=>e.key===key);
-  const value=prompt("File into which collection?  (blank to unfile)",entry.folder||"");
+  const value=prompt("File into which collection?  (blank to unfile)",entry.collection||"");
   if(value===null)return;
   annotate(key,{folder:value});
 }
@@ -1971,7 +2045,7 @@ UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024
 # recognise one during a scan; a second constant here could drift from it.
 
 
-def _file_into_collections(found, home: Path, label: str) -> None:
+def _file_into_collections(found, home: Path, label: str, web: str = "") -> None:
     """Put what arrived into a collection named after where it came from.
 
     A repository's own folders are the organisation its author chose; adopting
@@ -1980,7 +2054,7 @@ def _file_into_collections(found, home: Path, label: str) -> None:
     """
     for entry in found:
         record = library.get(entry.key)
-        if record.get("folder"):
+        if record.get("collection"):
             continue
         try:
             inner = Path(entry.path).parent.relative_to(home)
@@ -1989,7 +2063,10 @@ def _file_into_collections(found, home: Path, label: str) -> None:
         # The download folder keeps owner--repo so two owners cannot collide on
         # disk; a collection is read by a person, so it takes the repo name.
         parts = [label.split("--")[-1], *(p for p in inner.parts if p not in (".", ""))]
-        library.update(entry.key, folder="/".join(parts))
+        # Where this came from on the web, so a collection built out of a
+        # repository can link back to the folder it mirrors.
+        source = f"{web}/{inner.as_posix()}".rstrip("/") if web else ""
+        library.update(entry.key, collection="/".join(parts), source=source)
 
 
 def _ai_state() -> dict:
@@ -2082,42 +2159,89 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return next((e for e in self.entries if e.key == key), None)
 
+    def _forget(self, keys: set[str]) -> int:
+        """Drop sessions from the library and the index.
+
+        Files are removed only where they are the viewer's own. A copy under
+        ~/.atif/opened exists solely because the viewer made it; a scanned
+        session and a URL download are somebody's own files, sitting where they
+        chose, and forgetting a row is not permission to delete them.
+        """
+        removed = 0
+        for key in keys:
+            entry = next((e for e in self.entries if e.key == key), None)
+            library.remove(key)
+            if entry is None:
+                continue
+            removed += 1
+            if entry.origin != "opened":
+                continue
+            source = Path(entry.path)
+            if corpus.OPENED_ROOT not in source.parents:
+                continue
+            # An unpacked archive puts several logs under one directory, so
+            # clearing it wholesale would delete the siblings' files and leave
+            # their rows pointing at nothing.
+            store = corpus.OPENED_ROOT / source.relative_to(corpus.OPENED_ROOT).parts[0]
+            shares = any(
+                e.key not in keys and store in Path(e.path).parents for e in self.entries
+            )
+            if shares:
+                source.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(store, ignore_errors=True)
+
+        with self.lock:
+            self.entries = [e for e in self.entries if e.key not in keys]
+            _Handler.entries = self.entries
+        corpus.save(self.entries)
+        return removed
+
+    def _in_collection(self, name: str) -> set[str]:
+        """Keys filed under a collection, nested ones included."""
+        return {
+            e.key
+            for e in self.entries
+            if (inside := library.get(e.key).get("collection", ""))
+            and (inside == name or inside.startswith(f"{name}/"))
+        }
+
     def do_DELETE(self) -> None:
         url = urlparse(self.path)
+        query = parse_qs(url.query)
+
+        if url.path == "/api/collection":
+            name = (query.get("name") or [""])[0]
+            if not name:
+                self._json({"error": "a collection is required"}, 400)
+                return
+            keys = self._in_collection(name)
+            if (query.get("contents") or ["0"])[0] == "1":
+                self._json({"removed": self._forget(keys), "collection": name})
+                return
+            # The collection goes; what was in it does not.
+            for key in keys:
+                library.update(key, collection="")
+            self._json({"unfiled": len(keys), "collection": name})
+            return
+
         if url.path != "/api/library":
             self.send_error(404)
             return
-        key = (parse_qs(url.query).get("id") or [""])[0]
+
+        key = (query.get("id") or [""])[0]
         if not key:
             self._json({"error": "a key is required"}, 400)
             return
-
         entry = next((e for e in self.entries if e.key == key), None)
-        library.remove(key)
-
-        # An opened file only exists because it was brought in; forgetting it
-        # should not leave a stray copy on disk. A scanned file is not ours.
-        removed_copy = False
-        if entry is not None and entry.origin == "opened":
-            source = Path(entry.path)
-            if corpus.OPENED_ROOT in source.parents:
-                # An unpacked archive puts several logs under one directory, so
-                # clearing it wholesale would delete the siblings' files and
-                # leave their index rows pointing at nothing.
-                store = corpus.OPENED_ROOT / source.relative_to(corpus.OPENED_ROOT).parts[0]
-                shares = any(
-                    e.key != key and store in Path(e.path).parents for e in self.entries
-                )
-                if shares:
-                    source.unlink(missing_ok=True)
-                else:
-                    shutil.rmtree(store, ignore_errors=True)
-                removed_copy = True
-            with self.lock:
-                self.entries = [e for e in self.entries if e.key != key]
-                _Handler.entries = self.entries
-            corpus.save(self.entries)
-        self._json({"removed": True, "removed_copy": removed_copy})
+        origin = entry.origin if entry else ""
+        self._forget({key})
+        self._json({
+            "removed": True,
+            # Say plainly whether anything left the disk.
+            "removed_copy": origin == "opened",
+            "origin": origin,
+        })
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
@@ -2327,7 +2451,8 @@ class _Handler(BaseHTTPRequestHandler):
         nobody should discover that by pressing a button once.
         """
         try:
-            service, label, files = fetch.plan(body.get("url") or "", config.tokens())
+            plan = fetch.plan(body.get("url") or "", config.tokens())
+            service, label, files = plan.service, plan.label, plan.files
             into = fetch.destination(body.get("into"))
         except fetch.FetchError as exc:
             self._json({"error": str(exc)}, 400)
@@ -2366,7 +2491,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The same path an uploaded file takes, so a URL and a drop cannot
             # disagree about what counts as openable.
             try:
-                found = scan([home], origin="opened")
+                found = scan([home], origin="fetched")
             except (ValueError, OSError) as exc:
                 yield {"t": "error", "error": str(exc)}
                 return
@@ -2380,7 +2505,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.entries = merged
                 _Handler.entries = merged
             corpus.save(merged)
-            _file_into_collections(found, home, label)
+            _file_into_collections(found, home, label, plan.web)
             yield {"t": "added", "added": len(found), "into": str(home)}
 
         self._frames(produce)
@@ -2534,7 +2659,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "ai": _ai_state(),
                 "downloads": str(fetch.destination(None)),
                 "sessions": library.decorate(rows),
-                "folders": library.folders(),
+                "collections": library.collections(),
                 "tags": [{"name": t, "count": n} for t, n in library.tags()],
             }
             self._send(json.dumps(payload).encode(), "application/json")

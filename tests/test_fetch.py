@@ -136,7 +136,7 @@ def test_a_public_host_is_classified_by_what_is_understood(url, service):
 
 def test_a_bare_url_is_taken_as_one_file():
     """Only two hosts can be listed; everywhere else is a direct link."""
-    _, label, files = fetch.plan("https://example.com/runs/session.jsonl", {})
+    _, label, files, _ = fetch.plan("https://example.com/runs/session.jsonl", {})
     assert label == "example.com"
     assert [f.name for f in files] == ["session.jsonl"]
 
@@ -210,7 +210,7 @@ def test_a_dataset_url_lists_its_convertible_files(monkeypatch):
             ]
         },
     )
-    service, label, files = fetch.plan(
+    service, label, files, _ = fetch.plan(
         "https://huggingface.co/datasets/owner/name", {"hf": "tok"}
     )
     assert service == "hf"
@@ -230,7 +230,7 @@ def test_a_tree_url_with_a_revision_and_subdirectory(monkeypatch):
 
 def test_a_single_file_url_needs_no_listing(monkeypatch):
     seen = _stub(monkeypatch, {})
-    _, _, files = fetch.plan(
+    _, _, files, _ = fetch.plan(
         "https://huggingface.co/datasets/owner/name/blob/main/a/transcript.jsonl", {}
     )
     assert [f.name for f in files] == ["transcript.jsonl"]
@@ -240,7 +240,7 @@ def test_a_single_file_url_needs_no_listing(monkeypatch):
 
 def test_a_model_repo_works_as_well_as_a_dataset(monkeypatch):
     seen = _stub(monkeypatch, {"api/models": [{"type": "file", "path": "t.jsonl"}]})
-    _, label, files = fetch.plan("https://huggingface.co/owner/name", {})
+    _, label, files, _ = fetch.plan("https://huggingface.co/owner/name", {})
     assert label == "owner--name"
     assert "api/models/owner/name" in seen["urls"][0]
 
@@ -262,7 +262,7 @@ def test_a_repo_url_uses_the_default_branch(monkeypatch):
             "api.github.com/repos/owner/name": {"default_branch": "trunk"},
         },
     )
-    _, label, files = fetch.plan("https://github.com/owner/name", {"github": "gh"})
+    _, label, files, _ = fetch.plan("https://github.com/owner/name", {"github": "gh"})
     assert label == "owner--name"
     assert "/trunk/" in files[0].url
     assert seen["auth"] == ["gh", "gh"]
@@ -281,7 +281,7 @@ def test_a_subdirectory_narrows_the_listing(monkeypatch):
             }
         },
     )
-    _, _, files = fetch.plan("https://github.com/owner/name/tree/main/logs", {})
+    _, _, files, _ = fetch.plan("https://github.com/owner/name/tree/main/logs", {})
     assert [f.name for f in files] == ["logs/a.jsonl"]
 
 
@@ -293,7 +293,7 @@ def test_a_truncated_tree_is_reported_rather_than_silently_partial(monkeypatch):
 
 def test_a_raw_url_is_taken_as_one_file(monkeypatch):
     seen = _stub(monkeypatch, {})
-    _, _, files = fetch.plan(
+    _, _, files, _ = fetch.plan(
         "https://raw.githubusercontent.com/owner/name/main/logs/a.jsonl", {}
     )
     assert [f.name for f in files] == ["a.jsonl"]
@@ -302,7 +302,7 @@ def test_a_raw_url_is_taken_as_one_file(monkeypatch):
 
 def test_a_blob_url_is_rewritten_to_raw(monkeypatch):
     _stub(monkeypatch, {})
-    _, _, files = fetch.plan("https://github.com/owner/name/blob/main/a.jsonl", {})
+    _, _, files, _ = fetch.plan("https://github.com/owner/name/blob/main/a.jsonl", {})
     assert files[0].url.startswith("https://raw.githubusercontent.com/")
 
 
@@ -417,3 +417,20 @@ def test_a_parent_of_home_is_refused():
 def test_an_ordinary_folder_under_home_is_fine():
     target = fetch.destination("~/Documents/atif-downloads")
     assert target.is_relative_to(Path.home().resolve())
+
+
+def test_a_repository_reports_where_to_browse_it(monkeypatch):
+    """A collection built from a repo links back to the folder it mirrors."""
+    _stub(monkeypatch, {"api/datasets": [{"type": "file", "path": "a.jsonl"}]})
+    plan = fetch.plan("https://huggingface.co/datasets/owner/name/tree/v2/inner", {})
+    assert plan.web == "https://huggingface.co/datasets/owner/name/tree/v2"
+
+
+def test_a_github_repository_reports_where_to_browse_it(monkeypatch):
+    _stub(monkeypatch, {"git/trees": {"tree": [{"type": "blob", "path": "logs/a.jsonl"}]}})
+    plan = fetch.plan("https://github.com/owner/name/tree/main/logs", {})
+    assert plan.web == "https://github.com/owner/name/tree/main"
+
+
+def test_a_bare_link_has_nowhere_to_browse():
+    assert fetch.plan("https://example.com/a.jsonl", {}).web == ""
