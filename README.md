@@ -19,14 +19,18 @@ atif-view bundle.zip             # a bundle someone sent you
 atif-view --port 8080 --no-open
 ```
 
-**From URL…** in the top bar fetches straight from Hugging Face or GitHub: a
+**From local…** in the top bar opens a file, directory or archive from this
+machine; drag-and-drop does the same. **From URL…** beside it fetches straight
+from Hugging Face or GitHub: a
 whole repo, one folder inside it, or a single file — whichever the URL points
 at. Paste a dataset root and it takes everything convertible; paste
 `…/tree/main/some/folder` and it takes that folder only.
 
 Nothing downloads on the first press. The button lists what is there — how many
 files, how large, and where they will land — and downloads only when pressed
-again. Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
+again, with a progress bar as each file arrives. The index is refreshed before
+anything cosmetic happens, so a failure after the download cannot cost you the
+rows you just paid for. Files go to `./atif-downloads/<owner--name>/` beside where the viewer was
 launched, editable in the dialog, so a dataset you pull is somewhere you can
 actually reach rather than buried in a dot-directory. Because those files are
 yours rather than the viewer's, removing a session from the library forgets the

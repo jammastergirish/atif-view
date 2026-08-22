@@ -763,3 +763,33 @@ def test_a_malformed_history_is_ignored_rather_than_crashing(server, credentiale
     finally:
         patch.undo()
     assert frames[-1][1]["t"] == "done"
+
+
+def test_a_session_whose_file_is_gone_is_not_listed(server, tmp_path):
+    """A downloaded folder the reader deleted should not leave a dead row."""
+    before = _sessions(server)
+    assert before, "fixture session missing"
+
+    gone = tmp_path / "vanished.jsonl"
+    gone.write_text(LOG)
+    status, _ = _post(server + "/api/open", LOG.encode(), "vanished.jsonl")
+    assert status == 200
+    added = [s for s in _sessions(server) if "vanished" in s["path"]]
+    assert added, "the upload was not listed"
+
+    Path(added[0]["path"]).unlink()
+    assert not [s for s in _sessions(server) if "vanished" in s["path"]]
+
+
+def test_a_missing_file_is_hidden_rather_than_forgotten(server, tmp_path, monkeypatch):
+    """Purging on sight would delete entries whenever a drive is unmounted."""
+    from atif_make import corpus
+
+    status, _ = _post(server + "/api/open", LOG.encode(), "temporary.jsonl")
+    assert status == 200
+    stored = [e for e in corpus.load() if "temporary" in e.path]
+    assert stored, "the upload was not persisted"
+
+    Path(stored[0].path).unlink()
+    assert not [s for s in _sessions(server) if "temporary" in s["path"]]
+    assert [e for e in corpus.load() if "temporary" in e.path], "the entry was purged"

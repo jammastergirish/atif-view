@@ -21,6 +21,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -266,10 +267,13 @@ def plan(url: str, tokens: dict[str, str | None]) -> tuple[str, str, list[Remote
 
 def download(
     service: str, files: list[Remote], into: Path, tokens: dict[str, str | None]
-) -> list[Path]:
-    """Fetch each file under ``into``, returning what landed."""
+) -> Iterator[Path]:
+    """Fetch each file under ``into``, yielding each as it lands.
+
+    A generator so a caller can report progress: a dataset of several hundred
+    files takes long enough that a still screen reads as a hang.
+    """
     token = tokens.get(service)
-    written: list[Path] = []
     total = 0
 
     for remote in files:
@@ -289,6 +293,4 @@ def download(
         if total > MAX_TOTAL_BYTES:
             raise FetchError("That is larger than the fetch limit.")
         target.write_bytes(body)
-        written.append(target)
-
-    return written
+        yield target

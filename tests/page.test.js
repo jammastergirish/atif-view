@@ -57,6 +57,8 @@ for (const id of [
   "tagbar",
   "theme",
   "crumb",
+  "modal",
+  "urlmodal",
 ])
   global[id] = el();
 
@@ -726,6 +728,68 @@ test("sizes read as KB, MB or GB", () => {
   assert.strictEqual(run(`return bytes(4*1024*1024);`), "4.0 MB");
   assert.strictEqual(run(`return bytes(3*1024*1024*1024);`), "3.0 GB");
   assert.strictEqual(run(`return bytes(10);`), "1 KB", "a tiny file should not read as 0 KB");
+});
+
+test("the download reports progress as files land", () => {
+  const bar = { hidden: true }, fill = { style: {} }, state = { textContent: "" },
+        button = { textContent: "" };
+  run(`
+    document.getElementById=id=>({urlbar:globalThis.__bar,urlfill:globalThis.__fill,
+      urlstate:globalThis.__state,urlgo:globalThis.__button})[id]||null;
+    showProgress(3,12,"transcript.jsonl");`,
+    (globalThis.__bar = bar), (globalThis.__fill = fill),
+    (globalThis.__state = state), (globalThis.__button = button));
+  assert.strictEqual(bar.hidden, false, "the bar stayed hidden");
+  assert.strictEqual(fill.style.width, "25%");
+  assert.match(state.textContent, /3 of 12/);
+  assert.match(state.textContent, /transcript\.jsonl/);
+});
+
+test("the bar hides again when there is nothing running", () => {
+  const bar = { hidden: false }, fill = { style: {} };
+  run(`
+    document.getElementById=id=>({urlbar:globalThis.__bar,urlfill:globalThis.__fill})[id]||null;
+    showProgress(0,0);`,
+    (globalThis.__bar = bar), (globalThis.__fill = fill));
+  assert.strictEqual(bar.hidden, true);
+});
+
+test("a finished download refreshes the index before anything else can fail", async () => {
+  const calls = [];
+  globalThis.__calls = calls;
+  const fields = {
+    urlin: { value: "https://github.com/o/r" }, urlinto: { value: "/tmp/x" },
+    urlerr: { hidden: true }, urlstate: { textContent: "" },
+    urlgo: { textContent: "" }, urlbar: { hidden: true }, urlfill: { style: {} },
+  };
+  globalThis.__fields = fields;
+  await run(`
+    document.getElementById=id=>globalThis.__fields[id]||null;
+    globalThis.fetch=async(url,opts)=>{
+      globalThis.__calls.push(url);
+      if(url==="/api/fetch"){
+        const body=JSON.parse(opts.body);
+        if(!body.confirm)return {ok:true,json:async()=>({plan:true,label:"o--r",
+          count:2,bytes:2048,into:"/tmp/x/o--r",names:["a.jsonl"]})};
+        const lines=['{"t":"file","done":1,"total":2,"name":"a.jsonl"}',
+                     '{"t":"file","done":2,"total":2,"name":"b.jsonl"}',
+                     '{"t":"added","added":2,"into":"/tmp/x/o--r"}'];
+        const chunk=new TextEncoder().encode(lines.join(String.fromCharCode(10)));
+        let sent=false;
+        return {ok:true,body:{getReader:()=>({read:async()=>
+          sent?{done:true}:((sent=true),{done:false,value:chunk})})}};
+      }
+      return {ok:true,json:async()=>({sessions:[{key:"a"},{key:"b"}],folders:[],
+        tags:[],ai:{},downloads:"/tmp/x"})};
+    };
+    // Break what the toast depends on, rather than replacing the toast: the
+    // point is that the real note() cannot abort the handler.
+    document.createElement=()=>{throw new Error("no DOM here")};
+    // run() wraps this in a plain arrow, so chain rather than await.
+    return planUrl().then(()=>planUrl());`);
+  assert.ok(calls.includes("/api/index"), "the index was never refreshed");
+  assert.strictEqual(calls.filter((c) => c === "/api/fetch").length, 2);
+  assert.strictEqual(fields.urlerr.hidden, true, "a working download showed an error");
 });
 
 // ---- runner --------------------------------------------------------------------

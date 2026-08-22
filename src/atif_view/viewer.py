@@ -193,6 +193,10 @@ body.hide-side #main{padding-left:52px}
 #modal[hidden],#urlmodal[hidden]{display:none}
 .secret{margin-bottom:15px}
 .secret .row{margin-top:7px}
+#urlbar{height:4px;border-radius:2px;background:var(--sunk);overflow:hidden;margin-top:11px}
+#urlbar[hidden]{display:none}
+#urlfill{height:100%;width:0;background:var(--accent);border-radius:2px;
+  transition:width .18s ease-out}
 .sheet{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   box-shadow:var(--shadow);padding:22px 24px;width:min(520px,100%)}
 .sheet h2{font:600 15px var(--font-ui);margin:0 0 14px}
@@ -421,7 +425,7 @@ pre.json{line-height:1.45}
   <div id="crumb"></div>
   <button id="theme" onclick="cycleTheme()" title="Change theme"></button>
   <button id="gear" onclick="openSettings()" title="Settings">Settings</button>
-  <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive">Open…</button>
+  <button id="open" onclick="picker.click()" title="Open a log, trajectory or archive from this machine">From local…</button>
   <button id="fromurl" onclick="openUrl()" title="Fetch from Hugging Face or GitHub">From URL…</button>
 </header>
 
@@ -449,6 +453,7 @@ pre.json{line-height:1.45}
     <label for="urlinto">Into</label>
     <input id="urlinto" spellcheck="false" autocomplete="off"
            onkeydown="if(event.key==='Enter')planUrl()">
+    <div id="urlbar" hidden><div id="urlfill"></div></div>
     <p class="fine" id="urlstate">Hugging Face and GitHub only — a repo, a folder
        inside one, or a single file. Nothing downloads until you have seen what is
        there.</p>
@@ -821,11 +826,16 @@ async function openFiles(files){
   picker.value="";
 }
 
+/* A passing message. It swallows its own failures on purpose: this is the last
+   thing that happens after real work, and a cosmetic toast must never be the
+   reason a handler aborts. */
 function note(message){
-  const el=document.createElement("div");
-  el.className="note";el.textContent=message;
-  document.body.appendChild(el);
-  setTimeout(()=>el.remove(),6000);
+  try{
+    const el=document.createElement("div");
+    el.className="note";el.textContent=message;
+    document.body.appendChild(el);
+    setTimeout(()=>el.remove(),6000);
+  }catch(e){}
 }
 
 // Dropping a file anywhere is the same action as choosing one. dragenter and
@@ -1125,6 +1135,16 @@ function openUrl(){
 }
 const closeUrl=()=>{urlmodal.hidden=true;PLANNED=null};
 
+function showProgress(done,total,name){
+  const bar=document.getElementById("urlbar");
+  const fill=document.getElementById("urlfill");
+  if(!bar||!fill)return;
+  if(!total){bar.hidden=true;return}
+  bar.hidden=false;
+  fill.style.width=`${Math.round(100*done/total)}%`;
+  setUrlState(`${done} of ${total}${name?` · ${name}`:""}`,"Working");
+}
+
 function setUrlState(text,button){
   const state=document.getElementById("urlstate");
   if(state)state.textContent=text;
@@ -1140,13 +1160,26 @@ async function planUrl(){
   const into=(document.getElementById("urlinto").value||"").trim();
 
   if(PLANNED===url){
-    setUrlState("Downloading…","Working");
+    let result=null;
+    setUrlState("Starting…","Working");
     try{
-      const {added,into:where}=await postJSON("/api/fetch",{url,into,confirm:true});
-      closeUrl();
-      note(`Added ${added} session${added===1?"":"s"} — downloaded to ${where}`);
-      await refreshIndex();
-    }catch(e){err.textContent=e.message;err.hidden=false;setUrlState("","Look");PLANNED=null}
+      await streamJSON("/api/fetch",{url,into,confirm:true},frame=>{
+        if(frame.t==="file")showProgress(frame.done,frame.total,frame.name);
+        else if(frame.t==="added")result=frame;
+      });
+    }catch(e){
+      err.textContent=e.message;err.hidden=false;
+      showProgress(0,0);setUrlState("","Look");PLANNED=null;
+      return;
+    }
+    // The index comes first: a failure anywhere after it must not cost the
+    // reader the rows they just paid to download.
+    await refreshIndex();
+    cur=null;
+    showLibrary();
+    closeUrl();
+    showProgress(0,0);
+    if(result)note(`Added ${result.added} session${result.added===1?"":"s"} — ${result.into}`);
     return;
   }
 
@@ -1177,10 +1210,12 @@ async function postJSON(url,body){
 
 /* Read a streamed NDJSON response, calling back on every frame. Text arrives
    in pieces so an answer can be watched being written rather than waited for. */
-async function streamClaude(body,onFrame){
-  const res=await fetch("/api/ai",{method:"POST",
+const streamClaude=(body,onFrame)=>streamJSON("/api/ai",{key:cur,...body},onFrame);
+
+async function streamJSON(url,body,onFrame){
+  const res=await fetch(url,{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({key:cur,...body})});
+    body:JSON.stringify(body)});
   if(!res.ok){
     const data=await res.json().catch(()=>({}));
     throw new Error(data.error||`request failed (${res.status})`);
@@ -2210,38 +2245,42 @@ class _Handler(BaseHTTPRequestHandler):
             })
             return
 
-        try:
-            home.mkdir(parents=True, exist_ok=True)
-            fetch.download(service, files, home, config.tokens())
-        except fetch.FetchError as exc:
-            self._json({"error": str(exc)}, 502)
-            return
-        except OSError as exc:
-            self._json({"error": f"could not store the download: {exc.strerror}"}, 500)
-            return
+        def produce():
+            """Frames as the download runs: a still screen reads as a hang."""
+            try:
+                home.mkdir(parents=True, exist_ok=True)
+                done = 0
+                for path in fetch.download(service, files, home, config.tokens()):
+                    done += 1
+                    yield {"t": "file", "done": done, "total": len(files),
+                           "name": path.name}
+            except fetch.FetchError as exc:
+                yield {"t": "error", "error": str(exc)}
+                return
+            except OSError as exc:
+                yield {"t": "error", "error": f"could not store: {exc.strerror}"}
+                return
 
-        # The same path an uploaded file takes, so a URL and a drop cannot
-        # disagree about what counts as openable.
-        try:
-            found = scan([home], origin="opened")
-        except (ValueError, OSError) as exc:
-            self._json({"error": str(exc)}, 400)
-            return
-        if not found:
-            shutil.rmtree(home, ignore_errors=True)
-            self._json({"error": "nothing convertible was downloaded"}, 415)
-            return
+            # The same path an uploaded file takes, so a URL and a drop cannot
+            # disagree about what counts as openable.
+            try:
+                found = scan([home], origin="opened")
+            except (ValueError, OSError) as exc:
+                yield {"t": "error", "error": str(exc)}
+                return
+            if not found:
+                shutil.rmtree(home, ignore_errors=True)
+                yield {"t": "error", "error": "nothing convertible was downloaded"}
+                return
 
-        with self.lock:
-            merged = corpus.merge(self.entries, found)
-            self.entries = merged
-            _Handler.entries = merged
-        corpus.save(merged)
-        self._json({
-            "added": len(found),
-            "keys": [e.key for e in found],
-            "into": str(home),
-        })
+            with self.lock:
+                merged = corpus.merge(self.entries, found)
+                self.entries = merged
+                _Handler.entries = merged
+            corpus.save(merged)
+            yield {"t": "added", "added": len(found), "into": str(home)}
+
+        self._frames(produce)
 
     def _trajectory(self, entry) -> dict | None:
         """The converted trajectory for an entry, from cache when it is there."""
@@ -2382,6 +2421,11 @@ class _Handler(BaseHTTPRequestHandler):
                     "subagents": e.subagents,
                 }
                 for e in self.entries
+                # A downloaded folder the reader deleted, or a drive not mounted
+                # right now. Hidden rather than purged: an entry is cheap to
+                # keep, and deleting one because a volume is offline is not
+                # recoverable.
+                if Path(e.path).exists()
             ]
             payload = {
                 "ai": _ai_state(),

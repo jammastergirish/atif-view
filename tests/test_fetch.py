@@ -301,11 +301,13 @@ def test_too_many_bytes_is_refused_before_downloading(monkeypatch):
 
 def test_files_land_under_the_directory_given(monkeypatch, tmp_path):
     _stub(monkeypatch, {"a.jsonl": b'{"role":"user"}'})
-    written = fetch.download(
-        "hf",
-        [fetch.Remote("logs/a.jsonl", "https://huggingface.co/a.jsonl")],
-        tmp_path,
-        {},
+    written = list(
+        fetch.download(
+            "hf",
+            [fetch.Remote("logs/a.jsonl", "https://huggingface.co/a.jsonl")],
+            tmp_path,
+            {},
+        )
     )
     assert written == [tmp_path / "logs" / "a.jsonl"]
     assert written[0].read_bytes() == b'{"role":"user"}'
@@ -319,8 +321,8 @@ def test_files_land_under_the_directory_given(monkeypatch, tmp_path):
 def test_a_remote_name_cannot_escape_the_directory(monkeypatch, tmp_path, name):
     """The listing is remote data; a crafted path must not write outside."""
     _stub(monkeypatch, {"x": b"{}"})
-    written = fetch.download(
-        "hf", [fetch.Remote(name, "https://huggingface.co/x")], tmp_path, {}
+    written = list(
+        fetch.download("hf", [fetch.Remote(name, "https://huggingface.co/x")], tmp_path, {})
     )
     for path in written:
         assert path.resolve().is_relative_to(tmp_path.resolve()), f"escaped: {path}"
