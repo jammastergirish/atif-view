@@ -62,7 +62,16 @@ for (const id of [
 ])
   global[id] = el();
 
-const run = (body) => eval(script + "\n;(() => {" + body + "})()");
+/* The page script boots on every eval — it fetches the index and draws. Tests
+   stub globals inside their own body, so reset the ones the boot touches first,
+   or one test's stub crashes the next test's boot. */
+const SAFE_FETCH = () =>
+  Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+
+const run = (body) => {
+  global.fetch = SAFE_FETCH;
+  return eval(script + "\n;(() => {" + body + "})()");
+};
 
 const tests = [];
 const test = (name, body) => tests.push([name, body]);
@@ -790,6 +799,82 @@ test("a finished download refreshes the index before anything else can fail", as
   assert.ok(calls.includes("/api/index"), "the index was never refreshed");
   assert.strictEqual(calls.filter((c) => c === "/api/fetch").length, 2);
   assert.strictEqual(fields.urlerr.hidden, true, "a working download showed an error");
+});
+
+test("watching is remembered, and off by default", () => {
+  const store = {};
+  const box = { checked: false };
+  run(`
+    globalThis.localStorage={getItem:k=>globalThis.__store[k]||null,
+      setItem:(k,v)=>{globalThis.__store[k]=v}};
+    document.getElementById=id=>id==="autoscan"?globalThis.__box:null;
+    restoreAutoScan();`, (globalThis.__store = store), (globalThis.__box = box));
+  assert.strictEqual(box.checked, false, "watching started without being asked for");
+});
+
+test("turning watching on records it and looks straight away", () => {
+  const store = {};
+  const calls = [];
+  run(`
+    globalThis.localStorage={getItem:k=>globalThis.__store[k]||null,
+      setItem:(k,v)=>{globalThis.__store[k]=v}};
+    globalThis.setInterval=()=>1;
+    globalThis.__calls.length=0;          // the page script boots on every eval
+    scanMachine=(quiet)=>{globalThis.__calls.push(quiet)};
+    setAutoScan(true);`, (globalThis.__store = store), (globalThis.__calls = calls));
+  assert.strictEqual(store["atif-view.autoscan"], "1");
+  assert.deepStrictEqual(calls, [true], "the first look should be a quiet one");
+});
+
+test("turning watching off stops the timer", () => {
+  const cleared = [];
+  run(`
+    globalThis.localStorage={getItem:()=>null,setItem:()=>{}};
+    globalThis.setInterval=()=>42;
+    globalThis.clearInterval=id=>{globalThis.__cleared.push(id)};
+    scanMachine=()=>{};
+    setAutoScan(true);
+    setAutoScan(false);`, (globalThis.__cleared = cleared));
+  assert.deepStrictEqual(cleared, [42], "the interval was left running");
+});
+
+test("a watching scan that finds nothing leaves the reader where they are", async () => {
+  const drawn = [];
+  await run(`
+    globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
+      ?{found:0,total:3}
+      :{sessions:[{key:"a"},{key:"b"},{key:"c"}],groups:[],tags:[],ai:{}}});
+    document.getElementById=()=>null;
+    // The page script boots on every eval and settles over several turns, and
+    // its own load sets INDEX. Wait for that, then set the scene.
+    return new Promise(done=>setTimeout(done,0)).then(()=>{
+      INDEX=[{key:"a"},{key:"b"},{key:"c"}];
+      cur=null;
+      globalThis.__drawn.length=0;
+      showLibrary=()=>{globalThis.__drawn.push("redrew")};
+      return scanMachine(true);
+    });`, (globalThis.__drawn = drawn));
+  assert.deepStrictEqual(drawn, [], "a quiet scan redrew the page for no reason");
+});
+
+test("a watching scan that finds something says so", async () => {
+  const notes = [];
+  await run(`
+    globalThis.fetch=async(url)=>({ok:true,json:async()=>url==="/api/scan"
+      ?{found:2,total:5}
+      :{sessions:[{key:"a"},{key:"b"},{key:"c"},{key:"d"},{key:"e"}],
+        groups:[],tags:[],ai:{}}});
+    document.getElementById=()=>null;
+    return new Promise(done=>setTimeout(done,0)).then(()=>{
+      INDEX=[{key:"a"},{key:"b"},{key:"c"}];
+      cur=null;
+      globalThis.__notes.length=0;
+      showLibrary=()=>{};
+      note=m=>{globalThis.__notes.push(m)};
+      return scanMachine(true);
+    });`, (globalThis.__notes = notes));
+  assert.strictEqual(notes.length, 1);
+  assert.match(notes[0], /2 new sessions/);
 });
 
 // ---- runner --------------------------------------------------------------------

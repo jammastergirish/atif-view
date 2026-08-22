@@ -85,6 +85,17 @@ starred.
 
 A remote node links back to the folder it mirrors.
 
+**Look on this machine** in the Add dialog can be left running: tick *keep
+watching* and it looks again every minute, so a session started after the viewer
+opened turns up on its own. It runs only while the viewer is open — repeatedly
+reading someone's whole working history is not a thing to leave going out of
+sight — and a scan nobody asked for never redraws the table, since a minute
+later is not a moment anyone chose to be interrupted. It says so quietly when
+something new arrives.
+
+Indexing has no cut-off: it takes whatever Claude Code and Codex still have on
+disk, which is as far back as they keep it rather than a window this chooses.
+
 Removing a node removes the sessions under it — a node cannot be deleted on its
 own, since it describes where something came from rather than a choice anyone
 made. Removing a session takes everything kept about it: title, tags, stars,

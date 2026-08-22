@@ -471,8 +471,12 @@ pre.json{line-height:1.45}
          written here. Nothing is sent anywhere.</p>
       <div class="row">
         <button class="primary" id="scango" onclick="scanMachine()">Look on this machine</button>
-        <span class="fine" id="scanstate"></span>
+        <label class="aisw" title="Look again every minute while the viewer is open">
+          <input type="checkbox" id="autoscan" onchange="setAutoScan(this.checked)">
+          Keep watching
+        </label>
       </div>
+      <p class="fine" id="scanstate"></p>
     </section>
 
     <section class="way">
@@ -939,6 +943,7 @@ addEventListener("keydown",e=>{
 fetch("/api/index").then(r=>r.json()).then(d=>{
   INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";drawList();showLibrary();
+  restoreAutoScan();
 });
 q.oninput=drawList;
 
@@ -1231,6 +1236,7 @@ function openAdd(){
   const said=document.getElementById("scanstate");
   if(said)said.textContent="";
   urlmodal.hidden=false;
+  restoreAutoScan();
   const box=document.getElementById("urlin");
   if(box){box.value="";box.focus()}
   const into=document.getElementById("urlinto");
@@ -1239,19 +1245,49 @@ function openAdd(){
 }
 
 /* Indexing a machine is a deliberate act, not something to do because the
-   library happens to be empty. */
-async function scanMachine(){
+   library happens to be empty. Watching is that act repeated, so it is asked
+   for once and remembered — but only while the viewer is open, because
+   repeatedly reading someone's whole working history is not something to leave
+   running out of sight. */
+const SCAN_EVERY = 60_000;
+let SCAN_TIMER = null;
+
+function setAutoScan(on){
+  try{localStorage.setItem("atif-view.autoscan",on?"1":"")}catch(e){}
+  if(SCAN_TIMER){clearInterval(SCAN_TIMER);SCAN_TIMER=null}
+  if(!on)return;
+  SCAN_TIMER=setInterval(()=>scanMachine(true),SCAN_EVERY);
+  scanMachine(true);
+}
+
+function restoreAutoScan(){
+  let on=false;
+  try{on=localStorage.getItem("atif-view.autoscan")==="1"}catch(e){}
+  const box=document.getElementById("autoscan");
+  if(box)box.checked=on;
+  if(on&&!SCAN_TIMER)setAutoScan(true);
+}
+
+/* `quiet` marks a scan nobody pressed a button for. */
+async function scanMachine(quiet){
   const said=document.getElementById("scanstate");
   const go=document.getElementById("scango");
+  const before=INDEX.length;
   if(go)go.disabled=true;
-  if(said)said.textContent="Looking…";
+  if(said&&!quiet)said.textContent="Looking…";
   try{
-    const {found,total}=await postJSON("/api/scan",{});
-    await refreshIndex();
-    cur=null;showLibrary();
-    if(said)said.textContent=found
-      ?`Found ${num(found)} — ${num(total)} in the library.`
-      :"Nothing found on this machine.";
+    const {total}=await postJSON("/api/scan",{});
+    await refreshIndex(quiet);
+    const added=INDEX.length-before;
+    // A watching scan must not move the reader: they may be mid-transcript, and
+    // a minute later is not a moment they chose. Only a press, or something new
+    // to show, redraws.
+    if(added&&!cur)showLibrary();
+    if(added&&quiet)note(`${num(added)} new session${added===1?"":"s"}.`);
+    if(said)said.textContent=added
+      ?`Found ${num(added)} new — ${num(total)} in the library.`
+      :quiet?`Watching · ${num(total)} in the library.`
+      :`Nothing new — ${num(total)} in the library.`;
   }catch(e){
     if(said)said.textContent=e.message;
   }finally{
@@ -1475,12 +1511,14 @@ async function annotate(key,fields){
   await refreshIndex();
 }
 
-async function refreshIndex(){
+/* `quietly` reloads the data without redrawing the table — for a scan nobody
+   pressed a button for, which must not reshuffle what someone is reading. */
+async function refreshIndex(quietly){
   const d=await fetch("/api/index").then(r=>r.json());
   INDEX=d.sessions||[];GROUPS=d.groups||[];TAGS=d.tags||[];AI=d.ai||{};DOWNLOADS=d.downloads||DOWNLOADS;
   count.textContent=INDEX.length+" sessions";
   drawList();
-  if(!cur)showLibrary();
+  if(!cur&&!quietly)showLibrary();
 }
 
 const startEdit=(key,field)=>{
