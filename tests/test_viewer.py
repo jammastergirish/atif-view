@@ -875,3 +875,39 @@ def test_removing_a_node_removes_what_sits_under_it(server):
 def test_a_node_name_is_required(server):
     status, payload = _delete(server + "/api/group?name=")
     assert status == 400 and "folder is required" in payload["error"]
+
+
+def test_clearing_the_library_forgets_everything(server):
+    from atif_view import library
+
+    key = _first_key(server)
+    _try_post(server + "/api/library", {"key": key, "title": "kept", "tags": ["t"]})
+    assert _sessions(server)
+
+    status, payload = _delete(server + "/api/library?all=1")
+    assert status == 200 and payload["removed"] >= 1
+    assert _sessions(server) == []
+    assert library.load() == {}, "annotations outlived their sessions"
+
+
+def test_clearing_leaves_a_scanned_file_on_disk(server):
+    """Forgetting is not deleting; only the viewer's own copies go."""
+    path = Path(_sessions(server)[0]["path"])
+    _delete(server + "/api/library?all=1")
+    assert path.exists()
+
+
+def test_clearing_deletes_the_copies_the_viewer_made(server):
+    status, _ = _post(server + "/api/open", LOG.encode(), "brought-in.jsonl")
+    assert status == 200
+    copy = Path(next(s["path"] for s in _sessions(server) if "brought-in" in s["path"]))
+    assert copy.exists()
+
+    _delete(server + "/api/library?all=1")
+    assert not copy.exists(), "the viewer's own copy was left behind"
+
+
+def test_clearing_an_empty_library_is_harmless(server):
+    _delete(server + "/api/library?all=1")
+    status, payload = _delete(server + "/api/library?all=1")
+    assert status == 200 and payload["removed"] == 0

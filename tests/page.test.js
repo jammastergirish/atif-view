@@ -922,6 +922,62 @@ test("counts still roll up through a closed node", () => {
   assert.strictEqual(local.count, 2, "a closed node should still count what is inside");
 });
 
+test("the clear control appears only when there is something to clear", () => {
+  const empty = run(`
+    INDEX=[];GROUPS=[];EXPANDED={};
+    const el={innerHTML:""};
+    list=el;tagbar={innerHTML:""};
+    drawList();
+    return el.innerHTML;`);
+  assert.ok(!empty.includes("railtop"), "offered to clear an empty library");
+
+  const full = run(`
+    INDEX=[{key:"a",group:"Local"}];GROUPS=["Local"];EXPANDED={};
+    const el={innerHTML:""};
+    list=el;tagbar={innerHTML:""};
+    drawList();
+    return el.innerHTML;`);
+  assert.match(full, /railtop/);
+  assert.match(full, /Clear library/);
+});
+
+test("clearing asks first, and does nothing when refused", async () => {
+  const calls = [];
+  globalThis.__cleared = calls;
+  await run(`
+    INDEX=[{key:"a",origin:"scanned"}];
+    globalThis.confirm=()=>false;
+    globalThis.fetch=(url,opts)=>{globalThis.__cleared.push(url);
+      return Promise.resolve({ok:true,json:async()=>({})})};
+    return clearLibrary();`);
+  assert.deepStrictEqual(calls, [], "cleared without being confirmed");
+});
+
+test("the warning names how many copies the viewer would delete", async () => {
+  const asked = [];
+  globalThis.__asked = asked;
+  await run(`
+    INDEX=[{key:"a",origin:"scanned"},{key:"b",origin:"opened"},
+           {key:"c",origin:"fetched"}];
+    globalThis.confirm=m=>{globalThis.__asked.push(m);return false};
+    return clearLibrary();`);
+  assert.strictEqual(asked.length, 1);
+  assert.match(asked[0], /all 3 sessions/);
+  assert.match(asked[0], /1 copy the viewer made itself/);
+  assert.match(asked[0], /cached AI summaries/);
+});
+
+test("with nothing of ours, the warning says files simply stay", async () => {
+  const asked = [];
+  globalThis.__asked = asked;
+  await run(`
+    INDEX=[{key:"a",origin:"scanned"},{key:"c",origin:"fetched"}];
+    globalThis.confirm=m=>{globalThis.__asked.push(m);return false};
+    return clearLibrary();`);
+  assert.match(asked[0], /Files stay where they are\./);
+  assert.ok(!asked[0].includes("viewer made"));
+});
+
 // ---- runner --------------------------------------------------------------------
 (async () => {
   let failed = 0;

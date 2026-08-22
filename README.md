@@ -104,6 +104,11 @@ Files are deleted only where they are the viewer's own copy under
 `~/.atif/opened/`; a session found on this machine, or downloaded into a folder
 of yours, keeps its file.
 
+**Clear library** above the tree forgets every session at once, after saying
+how many and what it will touch. Files are left alone by the same rule as a
+single removal — only copies the viewer made itself are deleted — and stored
+tokens are settings rather than library, so they stay.
+
 Claude Code names a session's directory by replacing every `/` in the working
 directory with `-`, which cannot be undone by reading the string: `atif-make`
 and `atif/make` escape identically. The path is rebuilt by asking the filesystem

@@ -156,6 +156,11 @@ body.hide-side #main{padding-left:52px}
 .rsrc:hover{color:var(--accent)}
 .racts button.dang:hover{color:var(--danger)}
 .acts button.dang:hover{color:var(--danger)}
+.railtop{padding:6px 10px 8px;border-bottom:1px solid var(--line);margin-bottom:5px}
+.railtop button{width:100%;border:1px solid var(--line);background:none;color:var(--muted);
+  border-radius:5px;padding:4px 8px;font:500 10.5px var(--font-mono);letter-spacing:.05em;
+  cursor:pointer}
+.railtop button:hover{color:var(--danger);border-color:var(--danger)}
 .rail .rc{font:500 10px var(--font-mono);color:var(--muted)}
 .caret{width:10px;display:inline-flex;color:var(--muted);opacity:.75;
   transition:transform .12s ease}
@@ -1003,7 +1008,10 @@ function sourceOf(path){
 
 function drawList(){
   const rows=visibleRails();
-  list.innerHTML=rows.map(r=>{
+  list.innerHTML=(INDEX.length?`<div class="railtop">
+      <button onclick="clearLibrary()"
+        title="Forget every session. Files stay where they are.">Clear library</button>
+    </div>`:"")+rows.map(r=>{
     const on=collection===r.path;
     const caret=r.children
       ? `<span class="caret ${EXPANDED[r.path]?"open":""}"
@@ -1032,6 +1040,24 @@ function drawList(){
 }
 
 const setCollection=p=>{collection=p;cur=null;drawList();showLibrary()};
+
+/* Forget everything. Not "delete everything": the files are mostly not the
+   viewer's, and it says so before doing it. */
+async function clearLibrary(){
+  const owned=INDEX.filter(e=>e.origin==="opened").length;
+  if(!confirm(`Forget all ${num(INDEX.length)} session${INDEX.length===1?"":"s"}?\n\n`
+    +`Files stay where they are`
+    +(owned?`, except ${num(owned)} copy${owned===1?"":"ies"} the viewer made itself, `
+      +`which will be deleted.`:".")
+    +`\n\nTitles, tags, stars and any cached AI summaries go with them.`))return;
+  try{
+    const res=await fetch("/api/library?all=1",{method:"DELETE"});
+    if(!res.ok)throw new Error("could not clear the library");
+    cur=null;collection="__all";
+    await refreshIndex();
+    showLibrary();
+  }catch(e){note(e.message)}
+}
 
 /* Removing says what it will and will not touch. Only a copy the viewer made
    itself is deleted; a session found on this machine, or downloaded to a folder
@@ -2284,6 +2310,13 @@ class _Handler(BaseHTTPRequestHandler):
 
         if url.path != "/api/library":
             self.send_error(404)
+            return
+
+        if (query.get("all") or [""])[0] == "1":
+            # Everything the library knows. Files are left where they are by the
+            # same rule as a single removal: only a copy the viewer made is ours
+            # to delete.
+            self._json({"removed": self._forget({e.key for e in self.entries})})
             return
 
         key = (query.get("id") or [""])[0]
