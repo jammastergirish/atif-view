@@ -15,6 +15,7 @@ variables apply as they would anywhere else.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,29 @@ SECRETS: dict[str, Secret] = {
         "ghp_…",
     ),
 }
+
+
+# The AWS profile is a name rather than a credential — the CLI holds the
+# credential — so it is stored and shown in full.
+PROFILE_FIELD = "aws_profile"
+# A leading "-" would be read as an option by the CLI, so a name may not
+# start with one. Empty is allowed and means the default profile.
+PROFILE_OK = re.compile(r"^(?:[\w.@][\w.@-]{0,63})?$")
+
+
+def aws_profile(path: Path | None = None) -> str:
+    value = load(path).get(PROFILE_FIELD)
+    return value if isinstance(value, str) else ""
+
+
+def set_aws_profile(value: str, path: Path | None = None) -> None:
+    value = (value or "").strip()
+    if not PROFILE_OK.match(value):
+        raise ValueError("that does not look like an AWS profile name")
+    path = path or CONFIG_PATH
+    store.write_json(
+        path, {**load(path), "version": VERSION, PROFILE_FIELD: value}, private=True
+    )
 
 
 def load(path: Path | None = None) -> dict[str, Any]:
@@ -155,7 +179,12 @@ def state(path: Path | None = None) -> dict[str, dict[str, str]]:
 
 def tokens(path: Path | None = None) -> dict[str, str | None]:
     """The fetch credentials, by service name."""
-    return {"hf": secret("hf", path), "github": secret("github", path)}
+    return {
+        "hf": secret("hf", path),
+        "github": secret("github", path),
+        # Not a credential: the aws CLI resolves the session from this name.
+        "aws": aws_profile(path),
+    }
 
 
 # The Anthropic key predates the others and is referenced by name elsewhere.

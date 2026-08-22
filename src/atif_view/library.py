@@ -24,9 +24,12 @@ _lock = threading.Lock()
 
 _DEFAULTS: dict[str, Any] = {
     "title": "",
-    # Where a fetched session came from on the web. This is what places it in
-    # the tree, and what the tree links back to.
+    # Where a fetched session came from. This is what places it in the tree, what
+    # the tree links back to, and what a refresh asks again.
     "source": "",
+    # The folder that fetch was told to download into, so a refresh puts new
+    # files beside the old ones rather than somewhere else.
+    "into": "",
     "tags": [],
     "starred": False,
     "note": "",

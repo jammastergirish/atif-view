@@ -56,6 +56,24 @@ metadata endpoint, or something bound to localhost. Only Hugging Face and GitHub
 are understood well enough to list a repository; every other host is a link to
 one file.
 
+`s3://bucket/prefix` works too, read through the **aws CLI** rather than a
+library. That is deliberate: the CLI already owns the SSO session, the profile
+configuration and the refresh logic, so shelling out to it means this never
+holds an AWS credential and never has to renew one. Sign in yourself —
+
+```sh
+aws sso login --profile rw-eng
+```
+
+— set that profile name in Settings, and the viewer reuses the session. It never
+runs the login: that is an interactive, browser-based act belonging to the person
+at the keyboard. When there is no usable session it says so and gives the exact
+command, because the CLI's own advice (`aws login`) is not the SSO one.
+
+Arguments reach the CLI as a list with no shell, and the bucket, prefix and
+profile are checked against strict patterns first — a profile called `--profile`
+would otherwise be read as a flag.
+
 Gated repositories need a token — see Settings below.
 
 Build the index first with `atif-make index`, or point the viewer at a file,

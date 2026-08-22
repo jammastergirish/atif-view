@@ -12,6 +12,14 @@ redirects, since a redirect is a second request to a second host.
 Hugging Face and GitHub are understood well enough to list a repository; every
 other host is treated as a direct link to one file.
 
+**S3 goes through the aws CLI.** `s3://bucket/prefix` is listed and downloaded
+by running `aws`, never by holding a credential here: the CLI already owns the
+SSO session, the profile configuration and the refresh logic, so shelling out to
+it means this code never sees a key and never has to renew one. Arguments are
+passed as a list with no shell, and anything arriving from the page is checked
+against a strict pattern first, since an argument beginning with "-" would
+otherwise be read as a flag.
+
 **Nothing is downloaded without being listed first.** A dataset URL can name
 hundreds of files; `plan()` says what would be fetched and how much it weighs,
 and `download()` only runs once that has been seen.
@@ -24,7 +32,9 @@ from __future__ import annotations
 import json
 import re
 import ipaddress
+import shutil
 import socket
+import subprocess
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -57,6 +67,13 @@ DEFAULT_DIR = "atif-downloads"
 PROTECTED = (
     "/bin", "/sbin", "/usr", "/etc", "/dev", "/System", "/Library", "/private/etc",
 )
+
+# Bucket, key prefix and profile names, strict enough that nothing reaches the
+# argument list that could be read as a flag.
+S3_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+S3_PREFIX = re.compile(r"^[\w!.*'()/ -]*$")
+AWS_PROFILE = re.compile(r"^[\w.@][\w.@-]{0,63}$")
+AWS_TIMEOUT = 300
 
 MAX_FILES = 2_000
 MAX_TOTAL_BYTES = 2 * 1024**3
@@ -155,6 +172,90 @@ def _open(url: str, token: str | None, service: str) -> Any:
 def _json(url: str, token: str | None, service: str) -> Any:
     with _open(url, token, service) as response:
         return json.loads(response.read())
+
+
+# ---------------------------------------------------------------------- s3 ---
+
+
+def _aws(args: list[str], profile: str, json_out: bool = True) -> str:
+    """Run the aws CLI and return its stdout.
+
+    No shell, and the profile is checked before it reaches the argument list.
+    An expired session is reported rather than renewed: logging in is an
+    interactive, browser-based act that belongs to the person at the keyboard.
+    """
+    if shutil.which("aws") is None:
+        raise FetchError(
+            "The aws CLI is not installed, and S3 is read through it. "
+            "See https://aws.amazon.com/cli/"
+        )
+    if profile and not AWS_PROFILE.match(profile):
+        raise FetchError(f"{profile!r} is not a usable AWS profile name.")
+
+    command = ["aws", *args]
+    if json_out:
+        command += ["--output", "json"]
+    if profile:
+        command += ["--profile", profile]
+
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, timeout=AWS_TIMEOUT, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FetchError(f"Could not run the aws CLI: {exc}") from exc
+
+    if done.returncode != 0:
+        lines = (done.stderr or done.stdout).strip().splitlines()
+        detail = lines[-1] if lines else f"exit {done.returncode}"
+        # The CLI reports a missing session several ways — "Token has expired",
+        # "Unable to locate credentials", "NoCredentials" — and its own advice
+        # ("run aws login") is not the SSO command. Say the one that works.
+        lowered = detail.lower()
+        if any(word in lowered for word in ("expired", "sso", "credential", "token")):
+            named = profile or "<your-profile>"
+            raise FetchError(
+                f"No usable AWS session{'' if profile else ' for the default profile'}. "
+                f"In a terminal, run: aws sso login --profile {named}"
+                + ("" if profile else "  — and set that profile in Settings.")
+            )
+        raise FetchError(detail.removeprefix("aws: ").strip())
+    return done.stdout
+
+
+def _s3_plan(url: str, profile: str) -> tuple[str, list[Remote], str]:
+    rest = url[len("s3://") :].strip("/")
+    bucket, _, prefix = rest.partition("/")
+    if not S3_BUCKET.match(bucket):
+        raise FetchError(f"{bucket!r} is not a valid S3 bucket name.")
+    if not S3_PREFIX.match(prefix):
+        raise FetchError("That key prefix has characters this will not pass to the CLI.")
+
+    args = ["s3api", "list-objects-v2", "--bucket", bucket]
+    if prefix:
+        args += ["--prefix", prefix]
+    listing = json.loads(_aws(args, profile) or "{}")
+
+    cut = len(prefix.rstrip("/")) + 1 if prefix else 0
+    files = [
+        Remote(
+            name=str(row["Key"])[cut:].lstrip("/") or Path(str(row["Key"])).name,
+            url=f"s3://{bucket}/{row['Key']}",
+            size=row.get("Size"),
+        )
+        for row in listing.get("Contents", [])
+        if str(row.get("Key", "")).endswith(SUFFIXES)
+    ]
+    return bucket, files, f"s3://{bucket}/{prefix}".rstrip("/")
+
+
+def _s3_download(remote: Remote, target: Path, profile: str) -> None:
+    """One object straight to disk; the CLI streams it, so nothing is buffered."""
+    _aws(
+        ["s3", "cp", remote.url, str(target), "--only-show-errors"],
+        profile,
+        json_out=False,
+    )
 
 
 # ------------------------------------------------------------- hugging face ---
@@ -284,11 +385,38 @@ def destination(raw: str | None) -> Path:
     return path
 
 
+def _sized(plan: "Plan") -> "Plan":
+    """Refuse a plan that is too big before a byte of it is downloaded."""
+    if not plan.files:
+        raise FetchError(
+            "Nothing convertible there — looking for "
+            + ", ".join(SUFFIXES)
+            + " files."
+        )
+    if len(plan.files) > MAX_FILES:
+        raise FetchError(
+            f"{len(plan.files):,} files is more than this fetches at once "
+            f"(limit {MAX_FILES:,}). Point at a subdirectory."
+        )
+    known = sum(f.size or 0 for f in plan.files)
+    if known > MAX_TOTAL_BYTES:
+        raise FetchError(
+            f"That is {known / 1024**3:.1f} GB, over the "
+            f"{MAX_TOTAL_BYTES // 1024**3} GB limit."
+        )
+    return plan
+
+
 def plan(url: str, tokens: dict[str, str | None]) -> Plan:
     """What fetching this URL would pull: the service, a label, and the files."""
     url = (url or "").strip()
     if not url:
         raise FetchError("No URL given.")
+
+    if url.startswith("s3://"):
+        bucket, files, where = _s3_plan(url, tokens.get("aws") or "")
+        return _sized(Plan("s3", bucket, files, where))
+
     service = _check_host(url)
     token = tokens.get(service)
 
@@ -304,21 +432,7 @@ def plan(url: str, tokens: dict[str, str | None]) -> Plan:
         ], ""
     else:
         label, files, web = (_hf_plan if service == "hf" else _github_plan)(url, token)
-    if not files:
-        raise FetchError(
-            "Nothing convertible there — looking for .jsonl, .json or .har files."
-        )
-    if len(files) > MAX_FILES:
-        raise FetchError(
-            f"{len(files):,} files is more than this fetches at once "
-            f"(limit {MAX_FILES:,}). Link a subdirectory."
-        )
-    known = sum(f.size or 0 for f in files)
-    if known > MAX_TOTAL_BYTES:
-        raise FetchError(
-            f"That is {known / 1024**3:.1f} GB, over the {MAX_TOTAL_BYTES // 1024**3} GB limit."
-        )
-    return Plan(service, label, files, web)
+    return _sized(Plan(service, label, files, web))
 
 
 def download(
@@ -342,6 +456,11 @@ def download(
         if not target.resolve().is_relative_to(into.resolve()):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
+
+        if service == "s3":
+            _s3_download(remote, target, tokens.get("aws") or "")
+            yield target
+            continue
 
         with _open(remote.url, token, service) as response:
             body = response.read(MAX_TOTAL_BYTES - total + 1)

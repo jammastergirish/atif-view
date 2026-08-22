@@ -660,7 +660,9 @@ test("the sheet has a field for every credential the server can hold", () => {
   for (const label of ["Anthropic API key", "Hugging Face token", "GitHub token"]) {
     assert.ok(html.includes(label), `no field for ${label}`);
   }
-  assert.strictEqual(html.match(/class="secret"/g).length, 3);
+  // Three tokens plus the AWS profile, which is a name rather than a secret.
+  assert.strictEqual(html.match(/class="secret"/g).length, 4);
+  assert.match(html, /AWS profile/);
 });
 
 test("a saved token shows as dots with its tail, never as a value", () => {
@@ -672,7 +674,8 @@ test("a saved token shows as dots with its tail, never as a value", () => {
     drawSecrets();
     return host.innerHTML;`);
   assert.match(html, /placeholder="•+ \u2026GQAA"/);
-  assert.ok(!/value=/.test(html), "dots as a value could be submitted and stored");
+  const tokenField = html.slice(0, html.indexOf("AWS profile"));
+  assert.ok(!/value=/.test(tokenField), "dots as a value could be submitted and stored");
 });
 
 test("a token from the environment names the variable rather than showing dots", () => {

@@ -434,3 +434,125 @@ def test_a_github_repository_reports_where_to_browse_it(monkeypatch):
 
 def test_a_bare_link_has_nowhere_to_browse():
     assert fetch.plan("https://example.com/a.jsonl", {}).web == ""
+
+
+# ---- s3, read through the aws CLI --------------------------------------------------
+
+
+def _aws_stub(monkeypatch, stdout="", code=0, stderr=""):
+    """Stand in for the aws CLI, recording exactly what it was asked to run."""
+    seen = {}
+
+    class Done:
+        returncode, stdout, stderr = code, "", ""
+
+    def run(command, **kwargs):
+        seen["command"] = command
+        seen["shell"] = kwargs.get("shell", False)
+        done = Done()
+        done.stdout, done.stderr = stdout, stderr
+        return done
+
+    monkeypatch.setattr(fetch.shutil, "which", lambda name: "/usr/bin/aws")
+    monkeypatch.setattr(fetch.subprocess, "run", run)
+    return seen
+
+
+LISTING = json.dumps({
+    "Contents": [
+        {"Key": "runs/a.jsonl", "Size": 10},
+        {"Key": "runs/notes.md", "Size": 5},
+        {"Key": "runs/deep/b.jsonl", "Size": 7},
+    ]
+})
+
+
+def test_an_s3_url_lists_what_is_convertible(monkeypatch):
+    seen = _aws_stub(monkeypatch, stdout=LISTING)
+    plan = fetch.plan("s3://rr-agent-transcripts/runs", {"aws": "rw-eng"})
+    assert plan.service == "s3"
+    assert plan.label == "rr-agent-transcripts"
+    assert [f.name for f in plan.files] == ["a.jsonl", "deep/b.jsonl"]
+    assert plan.web == "s3://rr-agent-transcripts/runs"
+
+
+def test_the_cli_is_run_without_a_shell(monkeypatch):
+    """A shell would make every character of a bucket name a hazard."""
+    seen = _aws_stub(monkeypatch, stdout=LISTING)
+    fetch.plan("s3://rr-agent-transcripts/runs", {"aws": "rw-eng"})
+    assert seen["shell"] is False
+    assert seen["command"][0] == "aws"
+    assert "--profile" in seen["command"]
+    assert seen["command"][seen["command"].index("--profile") + 1] == "rw-eng"
+
+
+def test_no_profile_means_the_default_one(monkeypatch):
+    seen = _aws_stub(monkeypatch, stdout=LISTING)
+    fetch.plan("s3://rr-agent-transcripts/runs", {})
+    assert "--profile" not in seen["command"]
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    ["-rf", "UPPER", "a", "x" * 70, "has space", "semi;colon"],
+    ids=["flag-like", "uppercase", "too-short", "too-long", "space", "semicolon"],
+)
+def test_a_bucket_name_that_is_not_one_is_refused(monkeypatch, bucket):
+    _aws_stub(monkeypatch, stdout=LISTING)
+    with pytest.raises(fetch.FetchError, match="valid S3 bucket"):
+        fetch.plan(f"s3://{bucket}/runs", {})
+
+
+def test_a_profile_that_could_be_a_flag_is_refused(monkeypatch):
+    _aws_stub(monkeypatch, stdout=LISTING)
+    with pytest.raises(fetch.FetchError, match="usable AWS profile"):
+        fetch.plan("s3://rr-agent-transcripts/runs", {"aws": "--endpoint-url"})
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Error when retrieving token from sso: Token has expired",
+        "An error occurred (NoCredentials): Unable to locate credentials.",
+        "The SSO session associated with this profile has expired",
+    ],
+    ids=["expired-token", "no-credentials", "expired-session"],
+)
+def test_any_missing_session_says_how_to_fix_it(monkeypatch, said):
+    """The CLI words it several ways, and its own advice is the wrong command."""
+    _aws_stub(monkeypatch, code=255, stderr=said)
+    with pytest.raises(fetch.FetchError, match="aws sso login --profile rw-eng"):
+        fetch.plan("s3://rr-agent-transcripts/runs", {"aws": "rw-eng"})
+
+
+def test_without_a_profile_it_says_to_set_one(monkeypatch):
+    _aws_stub(monkeypatch, code=255, stderr="Unable to locate credentials")
+    with pytest.raises(fetch.FetchError, match="set that profile in Settings"):
+        fetch.plan("s3://rr-agent-transcripts/runs", {})
+
+
+def test_a_missing_cli_is_reported_plainly(monkeypatch):
+    monkeypatch.setattr(fetch.shutil, "which", lambda name: None)
+    with pytest.raises(fetch.FetchError, match="aws CLI is not installed"):
+        fetch.plan("s3://rr-agent-transcripts/runs", {})
+
+
+def test_an_s3_download_shells_out_per_object(monkeypatch, tmp_path):
+    seen = _aws_stub(monkeypatch, stdout="")
+    written = list(
+        fetch.download(
+            "s3",
+            [fetch.Remote("a.jsonl", "s3://bucket/runs/a.jsonl")],
+            tmp_path,
+            {"aws": "rw-eng"},
+        )
+    )
+    assert written == [tmp_path / "a.jsonl"]
+    assert seen["command"][:3] == ["aws", "s3", "cp"]
+    assert seen["command"][3] == "s3://bucket/runs/a.jsonl"
+
+
+def test_an_empty_bucket_says_nothing_convertible(monkeypatch):
+    _aws_stub(monkeypatch, stdout=json.dumps({"Contents": []}))
+    with pytest.raises(fetch.FetchError, match="Nothing convertible"):
+        fetch.plan("s3://rr-agent-transcripts/runs", {})

@@ -1023,9 +1023,12 @@ function drawList(){
         style="padding-left:${10+r.depth*13}px">
         ${caret}<span class="rl">${esc(r.name)}</span>
         ${r.path.startsWith("__")?"":`<span class="racts">
-          ${r.source?`<a class="rsrc" href="${esc(r.source)}" target="_blank"
-            rel="noreferrer noopener" title="Open ${esc(r.source)}"
+          ${r.source&&!r.source.startsWith("s3://")?`<a class="rsrc"
+            href="${esc(r.source)}" target="_blank" rel="noreferrer noopener"
+            title="Open ${esc(r.source)}"
             onclick="event.stopPropagation()">↗</a>`:""}
+          ${r.source?`<button title="Fetch this folder again"
+            onclick="event.stopPropagation();refreshGroup('${esc(r.path)}')">⟳</button>`:""}
           <button title="Remove these sessions from the library" class="dang"
             onclick="event.stopPropagation();dropGroup('${esc(r.path)}')">✕</button>
         </span>`}
@@ -1076,6 +1079,27 @@ async function forget(key){
     await refreshIndex();
     showLibrary();
   }catch(e){note(e.message)}
+}
+
+/* Fetch a remote folder again. Everything needed is already recorded, so this
+   asks no questions: same source, same destination, and anything unchanged
+   hashes to what is already there. */
+async function refreshGroup(name){
+  const said=document.getElementById("scanstate");
+  try{
+    note(`Refreshing ${name}…`);
+    let added=0;
+    await streamJSON("/api/refetch",{node:name},frame=>{
+      if(frame.t==="file")showProgress(frame.done,frame.total,frame.name);
+      else if(frame.t==="added")added=frame.added;
+    });
+    showProgress(0,0);
+    const before=INDEX.length;
+    await refreshIndex();
+    const fresh=INDEX.length-before;
+    note(fresh?`${num(fresh)} new session${fresh===1?"":"s"} in ${name}.`
+      :`${name} is up to date.`);
+  }catch(e){showProgress(0,0);note(e.message)}
 }
 
 async function dropGroup(name){
@@ -1242,8 +1266,21 @@ function drawSecrets(){
         <button onclick="clearSecret('${name}')">Remove</button>
       </div>
     </div>`;
-  }).join("");
+  }).join("")+`<div class="secret">
+    <label for="awsprofile">AWS profile</label>
+    <input id="awsprofile" spellcheck="false" autocomplete="off"
+      placeholder="default" value="${esc(AI.aws_profile||"")}"
+      onkeydown="if(event.key==='Enter')saveProfile()">
+    <p class="fine">A name, not a credential. S3 is read by running the aws CLI,
+       which holds the session — so sign in with
+       <code>aws sso login --profile &lt;name&gt;</code> in a terminal, and this
+       reuses it.</p>
+    <div class="row"><button class="primary" onclick="saveProfile()">Save</button></div>
+  </div>`;
 }
+
+const saveProfile=()=>settings({
+  aws_profile:(document.getElementById("awsprofile")||{}).value||""});
 
 async function settings(body){
   const err=document.getElementById("keyerr");
@@ -2126,6 +2163,9 @@ def _group(entry, source: str) -> str:
     if entry.origin == "fetched":
         if not source:
             return "Remote/Elsewhere"
+        if source.startswith("s3://"):
+            rest = source[len("s3://") :].strip("/")
+            return "/".join(["Remote", "S3", *[p for p in rest.split("/") if p]])
         parsed = urlparse(source)
         site = SITES.get(parsed.netloc, parsed.netloc or "Elsewhere")
         parts = [p for p in parsed.path.split("/") if p]
@@ -2172,6 +2212,7 @@ def _ai_state() -> dict:
         "model": ai.MODEL,
         # Every credential the viewer can hold — names and tails, never values.
         "secrets": config.state(),
+        "aws_profile": config.aws_profile(),
         "hosts": sorted(set(fetch.HOSTS)),
     }
 
@@ -2352,6 +2393,26 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"found": len(found), "total": len(merged)})
             return
 
+        if url.path == "/api/refetch":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                self._json({"error": "expected a JSON body"}, 400)
+                return
+            # A node knows where it came from and where it was put, so refreshing
+            # is the original fetch asked again — no new decisions to make.
+            node = body.get("node") or ""
+            keys = self._in_group(node)
+            records = [library.get(k) for k in keys]
+            source = next((r["source"] for r in records if r.get("source")), "")
+            into = next((r["into"] for r in records if r.get("into")), "")
+            if not source:
+                self._json({"error": "that folder was not fetched from anywhere"}, 400)
+                return
+            self._fetch({"url": source, "into": into, "confirm": True})
+            return
+
         if url.path == "/api/fetch":
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -2375,6 +2436,8 @@ class _Handler(BaseHTTPRequestHandler):
                 name = body.get("name") or "anthropic"
                 if body.get("clear"):
                     config.clear_secret(name)
+                elif "aws_profile" in body:
+                    config.set_aws_profile(body.get("aws_profile") or "")
                 elif "token" in body or "api_key" in body:
                     config.set_secret(name, body.get("token") or body.get("api_key") or "")
                 else:
@@ -2596,7 +2659,11 @@ class _Handler(BaseHTTPRequestHandler):
                 _Handler.entries = merged
             corpus.save(merged)
             for entry in found:
-                library.update(entry.key, source=_source_of(entry, home, plan.web))
+                library.update(
+                    entry.key,
+                    source=_source_of(entry, home, plan.web),
+                    into=str(into),
+                )
             yield {"t": "added", "added": len(found), "into": str(home)}
 
         self._frames(produce)

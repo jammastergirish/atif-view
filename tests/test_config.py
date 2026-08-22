@@ -160,4 +160,24 @@ def test_tokens_are_gathered_for_fetching(cfg, monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     config.set_secret("hf", "h" * 40, cfg)
-    assert config.tokens(cfg) == {"hf": "h" * 40, "github": None}
+    assert config.tokens(cfg) == {"hf": "h" * 40, "github": None, "aws": ""}
+
+
+def test_an_aws_profile_is_stored_in_full(cfg):
+    """A profile is a name, not a credential — the CLI holds the credential."""
+    config.set_aws_profile("rw-eng", cfg)
+    assert config.aws_profile(cfg) == "rw-eng"
+    assert config.tokens(cfg)["aws"] == "rw-eng"
+
+
+def test_a_profile_name_that_could_be_a_flag_is_refused(cfg):
+    """It reaches an argument list, where a leading dash reads as an option."""
+    for bad in ("--profile", "a b", "x;rm -rf /", "y" * 100):
+        with pytest.raises(ValueError, match="AWS profile name"):
+            config.set_aws_profile(bad, cfg)
+
+
+def test_clearing_the_profile_is_allowed(cfg):
+    config.set_aws_profile("rw-eng", cfg)
+    config.set_aws_profile("", cfg)
+    assert config.aws_profile(cfg) == ""
